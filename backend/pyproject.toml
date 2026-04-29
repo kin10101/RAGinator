@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "backend"
 version = "0.1.0"
@@ -17,3 +21,6 @@ dependencies = [
     "sentence-transformers>=5.4.1",
     "uvicorn>=0.35.0",
 ]
+
+[tool.setuptools]
+py-modules = ["main", "chunker", "vectordb"]
