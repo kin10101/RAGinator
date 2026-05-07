@@ -253,7 +253,7 @@ function SettingsPanel({ config, onChange, files, onClose }) {
       <label className="chat-settings-label" style={{ marginTop: "12px" }}>System prompt</label>
       <textarea
         className="chat-settings-textarea"
-        rows={5}
+        rows={12}
         value={config.system_prompt}
         onChange={(e) => handleChange("system_prompt", e.target.value)}
       />
