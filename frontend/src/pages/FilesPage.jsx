@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import axios from "axios"
 import FileUpload from "../components/FileUpload"
 import FileList from "../components/FileList"
@@ -35,8 +35,31 @@ function parseIntOr(value, fallback) {
   return Number.isFinite(next) ? next : fallback
 }
 
+const MIN_LEFT = 240
+const MAX_LEFT = 640
+
 export default function FilesPage() {
   const [files, setFiles] = useState([])
+  const [leftWidth, setLeftWidth] = useState(360)
+  const dragging = useRef(false)
+
+  const onPanelDragStart = useCallback((e) => {
+    e.preventDefault()
+    dragging.current = true
+    const startX = e.clientX
+    const startW = leftWidth
+    const onMove = (ev) => {
+      if (!dragging.current) return
+      setLeftWidth(Math.min(MAX_LEFT, Math.max(MIN_LEFT, startW + ev.clientX - startX)))
+    }
+    const onUp = () => {
+      dragging.current = false
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
+    }
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
+  }, [leftWidth])
   const [selectedFilename, setSelectedFilename] = useState(null)
   const [selectedFiles, setSelectedFiles] = useState([])
   const [embedStatuses, setEmbedStatuses] = useState({})
@@ -295,7 +318,7 @@ export default function FilesPage() {
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         <div
           style={{
-            width: "360px",
+            width: leftWidth,
             borderRight: "1px solid var(--border)",
             padding: "16px",
             display: "flex",
@@ -328,7 +351,18 @@ export default function FilesPage() {
           </div>
         </div>
 
-        
+        <div
+          onMouseDown={onPanelDragStart}
+          style={{
+            width: "4px",
+            flexShrink: 0,
+            cursor: "col-resize",
+            background: "transparent",
+            position: "relative",
+            zIndex: 10,
+          }}
+          className="panel-resizer"
+        />
 
         <div
           style={{

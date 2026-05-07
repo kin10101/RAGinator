@@ -1,4 +1,5 @@
 import { Routes, Route, NavLink } from "react-router-dom"
+import { useState, useCallback, useRef } from "react"
 import FilesPage from "./pages/FilesPage"
 import ChunksPage from "./pages/ChunksPage"
 import ChatPage from "./pages/ChatPage"
@@ -26,22 +27,63 @@ const ChatIcon = () => (
   </svg>
 )
 
+const MIN_WIDTH = 140
+const MAX_WIDTH = 400
+
+const COLLAPSED_WIDTH = 48
+
 export default function App() {
+  const [sidebarWidth, setSidebarWidth] = useState(210)
+  const [collapsed, setCollapsed] = useState(false)
+  const dragging = useRef(false)
+
+  const onMouseDown = useCallback((e) => {
+    if (collapsed) return
+    e.preventDefault()
+    dragging.current = true
+    const startX = e.clientX
+    const startW = sidebarWidth
+    const onMove = (ev) => {
+      if (!dragging.current) return
+      const next = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startW + ev.clientX - startX))
+      setSidebarWidth(next)
+    }
+    const onUp = () => {
+      dragging.current = false
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
+    }
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
+  }, [sidebarWidth])
+
   return (
     <div className="app-shell">
-      <nav className="sidebar">
-        <div className="sidebar-brand">RAG<span>ginator</span></div>
-        <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          <FileIcon /> Files
+      <nav className={`sidebar${collapsed ? " sidebar-collapsed" : ""}`} style={{ width: collapsed ? COLLAPSED_WIDTH : sidebarWidth }}>
+        <div className="sidebar-brand">
+          {!collapsed && <>RAG<span>ginator</span></>}
+          <button
+            className="sidebar-toggle"
+            onClick={() => setCollapsed((c) => !c)}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <svg viewBox="0 0 16 16" fill="none" width="14" height="14">
+              <path d={collapsed ? "M5 3l6 5-6 5" : "M11 3L5 8l6 5"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </div>
+        <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Files">
+          <FileIcon /> {!collapsed && "Files"}
         </NavLink>
-        <NavLink to="/chunks" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          <ChunksIcon /> Chunks
+        <NavLink to="/chunks" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Chunks">
+          <ChunksIcon /> {!collapsed && "Chunks"}
         </NavLink>
-        <NavLink to="/chat" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          <ChatIcon /> Chat
+        <NavLink to="/chat" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Chat">
+          <ChatIcon /> {!collapsed && "Chat"}
         </NavLink>
-        <div className="sidebar-footer">Knowledge base</div>
+        {!collapsed && <div className="sidebar-footer">Made by Don 😎</div>}
       </nav>
+      <div className="sidebar-resizer" onMouseDown={onMouseDown} />
       <Routes>
         <Route path="/" element={<FilesPage />} />
         <Route path="/chunks" element={<ChunksPage />} />

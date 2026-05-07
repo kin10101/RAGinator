@@ -454,16 +454,6 @@ export default function ChatPage() {
       </div>
 
       <div className="chat-body">
-        {/* ── Settings sidebar ── */}
-        {settingsOpen && (
-          <SettingsPanel
-            config={config}
-            onChange={setConfig}
-            files={files}
-            onClose={() => setSettingsOpen(false)}
-          />
-        )}
-
         {/* ── Main column: messages + input ── */}
         <div className="chat-main">
 
@@ -540,6 +530,16 @@ export default function ChatPage() {
         </div>
 
         </div>
+
+        {/* ── Settings sidebar ── */}
+        {settingsOpen && (
+          <SettingsPanel
+            config={config}
+            onChange={setConfig}
+            files={files}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
       </div>
     </div>
   )

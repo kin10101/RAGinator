@@ -78,7 +78,7 @@ export default function FileUpload({ API, onUpload }) {
           Upload Folder
         </button>
       </div>
-      <div style={{ fontSize: 10, color: "var(--muted)" }}>PDF � DOCX � TXT � code files</div>
+      <div style={{ fontSize: 10, color: "var(--muted)" }}>PDF - DOCX - TXT - code files</div>
       <input
         ref={filesInputRef}
         type="file"
