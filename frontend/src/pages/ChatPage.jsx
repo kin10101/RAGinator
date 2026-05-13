@@ -2,8 +2,10 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { API_BASE_URL } from "../utils/api"
+import { useNotebooks } from "../context/NotebookProvider"
 
 const API = API_BASE_URL
+const CHAT_HISTORY_KEY_PREFIX = "raginator.chatHistory"
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -17,10 +19,31 @@ function distanceToPercent(d) {
   return Math.max(0, Math.round((1 - d / 2) * 100))
 }
 
+function getChatHistoryStorageKey(notebookId) {
+  return `${CHAT_HISTORY_KEY_PREFIX}.${notebookId || "global"}`
+}
+
+function parseStoredMessages(raw) {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (msg) =>
+        msg &&
+        (msg.role === "user" || msg.role === "assistant") &&
+        typeof msg.content === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function SourcesPanel({ sources, isOpen, onToggle }) {
-  if (!sources || sources.length === 0) return null
+function SourcesPanel({ sources, retrieval, isOpen, onToggle }) {
+  if ((!sources || sources.length === 0) && !retrieval) return null
+  const stage = retrieval?.stages || null
   return (
     <div className="chat-sources">
       <button className="chat-sources-toggle" onClick={onToggle}>
@@ -32,12 +55,29 @@ function SourcesPanel({ sources, isOpen, onToggle }) {
             <rect x="9" y="9" width="5" height="5" rx="1" fill="currentColor" opacity="0.8" />
           </svg>
         </span>
-        {sources.length} source{sources.length !== 1 ? "s" : ""} retrieved
+        {sources?.length || 0} source{(sources?.length || 0) !== 1 ? "s" : ""} retrieved
         <span className="chat-sources-chevron" style={{ transform: isOpen ? "rotate(180deg)" : "none" }}>▾</span>
       </button>
       {isOpen && (
         <div className="chat-sources-list">
-          {sources.map((s) => {
+          {retrieval && (
+            <div className="chat-source-item" style={{ background: "rgba(25, 85, 160, 0.08)", borderStyle: "dashed" }}>
+              <div className="chat-source-header">
+                <span className="chat-source-file">retrieval pipeline</span>
+                <span className="chat-source-chunk">{retrieval.retrieval_mode || "hybrid"}</span>
+                <span className="chat-source-relevance">rerank {retrieval.rerank_enabled ? "on" : "off"}</span>
+              </div>
+              <p className="chat-source-excerpt">
+                top_k {retrieval.top_k} · min score {retrieval.min_relevance_score} · returned {retrieval.returned_count}
+              </p>
+              {stage && (
+                <p className="chat-source-excerpt" style={{ marginTop: "6px" }}>
+                  dense {stage.dense?.returned ?? 0}/{stage.dense?.requested_k ?? 0} · lexical {stage.lexical?.returned ?? 0}/{stage.lexical?.requested_k ?? 0} · fusion {stage.fusion?.output ?? 0} · rerank {stage.rerank?.backend || retrieval.rerank_backend || "none"} ({stage.rerank?.output ?? 0}) · threshold drop {stage.threshold?.dropped ?? retrieval.dropped_below_score ?? 0}
+                </p>
+              )}
+            </div>
+          )}
+          {(sources || []).map((s) => {
             const relevance = distanceToPercent(s.distance)
             return (
               <div key={s.id} className="chat-source-item">
@@ -48,7 +88,12 @@ function SourcesPanel({ sources, isOpen, onToggle }) {
                     <span className="chat-source-relevance">{relevance}% match</span>
                   )}
                 </div>
-                <p className="chat-source-excerpt">{s.document.slice(0, 220)}{s.document.length > 220 ? "…" : ""}</p>
+                <p className="chat-source-excerpt">
+                  {s.document.slice(0, 220)}{s.document.length > 220 ? "…" : ""}
+                </p>
+                <p className="chat-source-excerpt" style={{ marginTop: "4px" }}>
+                  scores · dense {s.dense_score ?? "-"} · lexical {s.lexical_score ?? "-"} · fusion {s.fusion_score ?? "-"} · rerank {s.rerank_score ?? "-"}
+                </p>
               </div>
             )
           })}
@@ -86,7 +131,7 @@ function ChatMessage({ msg, isStreaming }) {
               pre({ children }) {
                 return <pre className="chat-code-block">{children}</pre>
               },
-              code({ node, className, children, ...props }) {
+              code({ className, children, ...props }) {
                 return className ? (
                   <code className={className} {...props}>{children}</code>
                 ) : (
@@ -104,6 +149,7 @@ function ChatMessage({ msg, isStreaming }) {
       {msg.sources && (
         <SourcesPanel
           sources={msg.sources}
+          retrieval={msg.retrieval}
           isOpen={sourcesOpen}
           onToggle={() => setSourcesOpen((o) => !o)}
         />
@@ -112,7 +158,7 @@ function ChatMessage({ msg, isStreaming }) {
   )
 }
 
-function SettingsPanel({ config, onChange, files, onClose }) {
+function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
   const handleChange = (key, value) => onChange({ ...config, [key]: value })
   const [ollamaModels, setOllamaModels] = useState([])
   const [ollamaError, setOllamaError] = useState(null)
@@ -120,7 +166,6 @@ function SettingsPanel({ config, onChange, files, onClose }) {
   // Fetch Ollama models whenever the provider or base URL changes
   useEffect(() => {
     if (config.provider !== "ollama") return
-    setOllamaError(null)
     const url = `${API}/chat/ollama-models?base_url=${encodeURIComponent(config.ollama_base_url)}`
     fetch(url)
       .then((r) => r.json())
@@ -228,6 +273,58 @@ function SettingsPanel({ config, onChange, files, onClose }) {
         onChange={(e) => handleChange("top_k", parseInt(e.target.value, 10))}
       />
 
+      <label className="chat-settings-label">RAG — retrieval mode</label>
+      <select
+        className="chat-settings-select"
+        value={config.retrieval_mode}
+        onChange={(e) => handleChange("retrieval_mode", e.target.value)}
+      >
+        <option value="hybrid">Hybrid (dense + BM25)</option>
+        <option value="dense">Dense only</option>
+      </select>
+
+      <label className="chat-settings-label">
+        <input
+          type="checkbox"
+          checked={config.rerank_enabled}
+          onChange={(e) => handleChange("rerank_enabled", e.target.checked)}
+          style={{ marginRight: "8px" }}
+        />
+        Enable reranker stage
+      </label>
+
+      <label className="chat-settings-label">RAG — minimum relevance score ({config.min_relevance_score})</label>
+      <input
+        type="range" min="0" max="1" step="0.01"
+        className="chat-settings-range"
+        value={config.min_relevance_score}
+        onChange={(e) => handleChange("min_relevance_score", parseFloat(e.target.value))}
+      />
+
+      <label className="chat-settings-label">Dense candidate pool</label>
+      <input
+        type="number" min="1" max="200" step="1"
+        className="chat-settings-input"
+        value={config.dense_candidate_k}
+        onChange={(e) => handleChange("dense_candidate_k", parseInt(e.target.value, 10))}
+      />
+
+      <label className="chat-settings-label">Lexical candidate pool</label>
+      <input
+        type="number" min="1" max="200" step="1"
+        className="chat-settings-input"
+        value={config.lexical_candidate_k}
+        onChange={(e) => handleChange("lexical_candidate_k", parseInt(e.target.value, 10))}
+      />
+
+      <label className="chat-settings-label">Rerank candidate pool</label>
+      <input
+        type="number" min="1" max="200" step="1"
+        className="chat-settings-input"
+        value={config.rerank_candidate_k}
+        onChange={(e) => handleChange("rerank_candidate_k", parseInt(e.target.value, 10))}
+      />
+
       <label className="chat-settings-label">
         <input
           type="checkbox"
@@ -236,6 +333,16 @@ function SettingsPanel({ config, onChange, files, onClose }) {
           style={{ marginRight: "8px" }}
         />
         Enable RAG retrieval
+      </label>
+
+      <label className="chat-settings-label">
+        <input
+          type="checkbox"
+          checked={config.retrieval_debug}
+          onChange={(e) => handleChange("retrieval_debug", e.target.checked)}
+          style={{ marginRight: "8px" }}
+        />
+        Include retrieval diagnostics
       </label>
 
       <label className="chat-settings-label" style={{ marginTop: "12px" }}>Filter by file (optional)</label>
@@ -249,6 +356,11 @@ function SettingsPanel({ config, onChange, files, onClose }) {
           <option key={f} value={f}>{fileBasename(f)}</option>
         ))}
       </select>
+      {activeNotebook && (
+        <span style={{ fontSize: "11px", color: "var(--muted)" }}>
+          Scoped to notebook: {activeNotebook.name}
+        </span>
+      )}
 
       <label className="chat-settings-label" style={{ marginTop: "12px" }}>System prompt</label>
       <textarea
@@ -270,18 +382,26 @@ const DEFAULT_CONFIG = {
   temperature: 0.3,
   max_tokens: 1024,
   top_k: 5,
+  retrieval_mode: "hybrid",
+  rerank_enabled: true,
+  min_relevance_score: 0.2,
+  dense_candidate_k: 20,
+  lexical_candidate_k: 20,
+  rerank_candidate_k: 16,
   rag_enabled: true,
+  retrieval_debug: false,
   filename_filter: null,
   system_prompt:
     "You are a helpful, knowledgeable assistant. " +
-    "When relevant context is provided from the knowledge base, use it to answer accurately. " +
-    "Always cite the source document name when drawing from retrieved context. " +
-    "If the context does not contain an answer, say so clearly and answer from general knowledge if possible. " +
+    "When relevant notebook content is provided from the knowledge base, use it to answer accurately. " +
+    "Always cite the source document name when drawing from retrieved notebook content. " +
+    "If the notebook content does not contain an answer, say so clearly and answer from general knowledge if possible. " +
     "Format your responses in clear, readable Markdown.",
 }
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState([]) // { role, content, sources? }
+  const { activeNotebook, activeNotebookId } = useNotebooks()
+  const [messages, setMessages] = useState([]) // { role, content, sources?, retrieval? }
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
   const [status, setStatus] = useState("idle") // "idle" | "searching" | "streaming" | "error"
@@ -289,18 +409,47 @@ export default function ChatPage() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [files, setFiles] = useState([])
   const [error, setError] = useState(null)
+  const [historyReady, setHistoryReady] = useState(false)
 
   const bottomRef = useRef(null)
   const abortRef = useRef(null)
   const textareaRef = useRef(null)
 
+  // Load chat history for the active notebook.
+  useEffect(() => {
+    const key = getChatHistoryStorageKey(activeNotebookId)
+    const saved = parseStoredMessages(localStorage.getItem(key))
+    setMessages(saved)
+    setError(null)
+    setHistoryReady(true)
+  }, [activeNotebookId])
+
+  // Persist chat history so tab navigation does not clear it.
+  useEffect(() => {
+    if (!historyReady) return
+    const key = getChatHistoryStorageKey(activeNotebookId)
+    if (messages.length === 0) {
+      localStorage.removeItem(key)
+      return
+    }
+    localStorage.setItem(key, JSON.stringify(messages))
+  }, [messages, activeNotebookId, historyReady])
+
   // Fetch file list on mount
   useEffect(() => {
     fetch(`${API}/files`)
       .then((r) => r.json())
-      .then((data) => setFiles(data.map((f) => f.filename)))
+      .then((data) => {
+        const names = data.map((f) => f.filename)
+        if (!activeNotebook) {
+          setFiles(names)
+          return
+        }
+        const allowed = new Set(activeNotebook.filenames || [])
+        setFiles(names.filter((name) => allowed.has(name)))
+      })
       .catch(() => {})
-  }, [])
+  }, [activeNotebook])
 
   // Auto-scroll
   useEffect(() => {
@@ -326,12 +475,35 @@ export default function ChatPage() {
 
     const controller = new AbortController()
     abortRef.current = controller
+    const STREAM_INACTIVITY_MS = 90000
+    let inactivityTimer = null
+    let didTimeout = false
+
+    const clearInactivityTimer = () => {
+      if (inactivityTimer) {
+        clearTimeout(inactivityTimer)
+        inactivityTimer = null
+      }
+    }
+
+    const resetInactivityTimer = () => {
+      clearInactivityTimer()
+      inactivityTimer = setTimeout(() => {
+        didTimeout = true
+        controller.abort()
+      }, STREAM_INACTIVITY_MS)
+    }
 
     try {
       const res = await fetch(`${API}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, history, ...config }),
+        body: JSON.stringify({
+          message: text,
+          history,
+          ...config,
+          notebook_id: activeNotebook?.id || null,
+        }),
         signal: controller.signal,
       })
 
@@ -343,11 +515,13 @@ export default function ChatPage() {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      let streamFinished = false
+      resetInactivityTimer()
 
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
+      while (!streamFinished) {
         const { done, value } = await reader.read()
         if (done) break
+        resetInactivityTimer()
         buffer += decoder.decode(value, { stream: true })
 
         const parts = buffer.split("\n\n")
@@ -367,10 +541,15 @@ export default function ChatPage() {
             setStatus("streaming")
             setMessages((prev) => {
               const next = [...prev]
-              next[next.length - 1] = { ...next[next.length - 1], sources: payload.sources }
+              next[next.length - 1] = {
+                ...next[next.length - 1],
+                sources: payload.sources,
+                retrieval: payload.retrieval || null,
+              }
               return next
             })
           } else if (payload.type === "token") {
+            setStatus("streaming")
             setMessages((prev) => {
               const next = [...prev]
               const last = next[next.length - 1]
@@ -378,10 +557,25 @@ export default function ChatPage() {
               return next
             })
           } else if (payload.type === "done") {
-            // stream complete
+            streamFinished = true
           } else if (payload.type === "error") {
             throw new Error(payload.message)
           }
+        }
+      }
+
+      // Process any trailing buffered payload if stream closed without a final split.
+      const tail = buffer.trim()
+      if (!streamFinished && tail.startsWith("data:")) {
+        try {
+          const payload = JSON.parse(tail.slice("data:".length).trim())
+          if (payload.type === "done") {
+            streamFinished = true
+          } else if (payload.type === "error") {
+            throw new Error(payload.message)
+          }
+        } catch {
+          // Ignore malformed tail fragments.
         }
       }
     } catch (err) {
@@ -395,13 +589,16 @@ export default function ChatPage() {
           }
           return next
         })
+      } else if (didTimeout) {
+        setError("The model stream timed out due to inactivity. Try again or switch model/provider.")
       }
     } finally {
+      clearInactivityTimer()
       setStreaming(false)
       setStatus("idle")
       abortRef.current = null
     }
-  }, [input, messages, streaming, config])
+  }, [input, messages, streaming, config, activeNotebook?.id])
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -432,6 +629,7 @@ export default function ChatPage() {
       {/* ── Top bar ── */}
       <div className="topbar">
         <span className="topbar-title">Chat</span>
+        {activeNotebook && <span className="status-chip embedding">Notebook: {activeNotebook.name}</span>}
         {config.rag_enabled ? (
           <span className="status-chip success" style={{ fontSize: "10px" }}>RAG on</span>
         ) : (
@@ -537,6 +735,7 @@ export default function ChatPage() {
             config={config}
             onChange={setConfig}
             files={files}
+            activeNotebook={activeNotebook}
             onClose={() => setSettingsOpen(false)}
           />
         )}

@@ -26,7 +26,9 @@ export default function StatusModal({ open, status = "info", title, lines = [], 
                            "var(--accent)"
 
   const icon =
-    status === "success" ? (
+    status === "loading" ? (
+      <span className="modal-spinner" aria-label="Loading" />
+    ) : status === "success" ? (
       <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
         <circle cx="11" cy="11" r="10" stroke={accent} strokeWidth="1.5" />
         <path d="M6.5 11.5l3 3 6-6" stroke={accent} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -92,7 +94,7 @@ export default function StatusModal({ open, status = "info", title, lines = [], 
         )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-          {onConfirm ? (
+          {status !== "loading" && (onConfirm ? (
             <>
               <button className="btn" type="button" onClick={onClose} style={{ minWidth: "72px" }}>
                 Cancel
@@ -105,7 +107,7 @@ export default function StatusModal({ open, status = "info", title, lines = [], 
             <button className="btn btn-primary" type="button" onClick={onClose} style={{ minWidth: "72px" }}>
               OK
             </button>
-          )}
+          ))}
         </div>
       </div>
     </div>

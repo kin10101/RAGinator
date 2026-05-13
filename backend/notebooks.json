@@ -1,0 +1,72 @@
+{
+  "notebooks": [
+    {
+      "id": "c1a234db80f64f428fcbb118434ca2d5",
+      "name": "Journal Entries",
+      "description": "Personal",
+      "color": "#0ced79",
+      "filenames": [
+        "2022-aug.txt",
+        "2022-dec.txt",
+        "2022-nov.txt",
+        "2022-oct.txt",
+        "2022-sep.txt",
+        "2023-apr.txt",
+        "2023-feb.txt",
+        "2023-jan.txt",
+        "2023-mar.txt",
+        "2024-mar.txt",
+        "2025-apr.txt",
+        "2025-aug.txt",
+        "2025-dec.txt",
+        "2025-july.txt",
+        "2025-june.txt",
+        "2025-mar.txt",
+        "2025-may.txt",
+        "2025-nov.txt",
+        "2025-sep.txt",
+        "2026-feb.txt",
+        "2026-jan.txt",
+        "2026-mar.txt",
+        "nov-2022.txt"
+      ],
+      "created_at": "2026-05-12T05:08:40.518319+00:00",
+      "visibility": "private",
+      "owner_id": null
+    },
+    {
+      "id": "1075d786885b4f2882231f902ca55f99",
+      "name": "APC Handbook",
+      "description": "things related to Asia Pacific College",
+      "color": "#4f7cff",
+      "filenames": [
+        "Student-Handbook-2024_v2.pdf"
+      ],
+      "created_at": "2026-05-12T05:11:12.251429+00:00",
+      "visibility": "private",
+      "owner_id": null
+    },
+    {
+      "id": "d0c828c78cbf47408305bff4382809ae",
+      "name": "General Notes",
+      "description": "example notes",
+      "color": "#4f7cff",
+      "filenames": [
+        "Gmail - DFA Passport Appointment System - Confirmation Notification.pdf"
+      ],
+      "created_at": "2026-05-12T09:23:40.249837+00:00",
+      "visibility": "private",
+      "owner_id": null
+    },
+    {
+      "id": "5cc6a0fe6947467d8c8ed05633829a4e",
+      "name": "filler",
+      "description": "",
+      "color": "#4f7cff",
+      "filenames": [],
+      "created_at": "2026-05-13T03:22:09.771082+00:00",
+      "visibility": "private",
+      "owner_id": null
+    }
+  ]
+}

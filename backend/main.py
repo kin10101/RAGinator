@@ -14,14 +14,15 @@ from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from chunker import DEFAULT_CHUNK_METHOD, chunk_text, list_chunk_methods
+from chunker import DEFAULT_CHUNK_METHOD, chunk_text, list_chunk_methods, summarize_chunks
+from notebooks import NotebookManager, DEFAULT_NOTEBOOK_COLOR, DEFAULT_NOTEBOOK_VISIBILITY
 from vectordb import (
     build_embeddings,
     delete_file_chunks,
     get_collection,
     get_file_chunk_count,
     list_chunks,
-    search_chunks,
+    search_chunks_with_diagnostics,
     upsert_file_chunks,
 )
 
@@ -32,6 +33,7 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 TEXT_DIR = BASE_DIR / "texts"
 CHROMA_DIR = BASE_DIR / "chroma_db"
+NOTEBOOKS_FILE = BASE_DIR / "notebooks.json"
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 TEXT_DIR.mkdir(parents=True, exist_ok=True)
@@ -41,6 +43,7 @@ app = FastAPI(title="React RAG Backend")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 collection = get_collection(CHROMA_DIR)
+notebook_manager = NotebookManager(NOTEBOOKS_FILE)
 
 # ── OpenAI client (lazy – only initialised when /chat is used) ────────────────
 _openai_client: AsyncOpenAI | None = None
@@ -75,12 +78,19 @@ CHAT_DEFAULTS = {
     "temperature": 0.3,               # 0 = deterministic, 1 = creative
     "max_tokens": 1024,               # Max tokens in the completion
     "top_k": 5,                       # Number of RAG chunks to retrieve
+    "min_relevance_score": 0.20,      # Drop retrieved chunks below this similarity score
+    "retrieval_mode": "hybrid",      # "dense" | "hybrid"
+    "rerank_enabled": True,           # Apply reranker on fused candidates
+    "dense_candidate_k": 20,          # Dense retriever candidate pool size
+    "lexical_candidate_k": 20,        # Lexical BM25 candidate pool size
+    "rerank_candidate_k": 16,         # Candidate count reranked before top-k + threshold
     "rag_enabled": True,              # Toggle RAG retrieval on/off
+    "retrieval_debug": False,         # Include retrieval diagnostics in stream payload
     "system_prompt": (
         "You are a helpful, knowledgeable assistant. "
-        "When relevant context is provided from the knowledge base, use it to answer accurately. "
-        "Always cite the source document name when drawing from retrieved context. "
-        "If the context does not contain an answer, say so clearly and answer from general knowledge if possible. "
+        "When relevant notebook content is provided from the knowledge base, use it to answer accurately. "
+        "Always cite the source document name when drawing from retrieved notebook content. "
+        "If the notebook content does not contain an answer, say so clearly and answer from general knowledge if possible. "
         "Format your responses in clear, readable Markdown."
     ),
 }
@@ -100,7 +110,35 @@ class EmbedRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
+    min_relevance_score: Optional[float] = None
+    retrieval_mode: Optional[str] = None
+    rerank_enabled: Optional[bool] = None
+    dense_candidate_k: Optional[int] = None
+    lexical_candidate_k: Optional[int] = None
+    rerank_candidate_k: Optional[int] = None
+    include_debug: bool = False
     filename: Optional[str] = None
+    filenames: Optional[List[str]] = None
+
+
+class NotebookCreate(BaseModel):
+    name: str
+    description: str = ""
+    color: str = DEFAULT_NOTEBOOK_COLOR
+    visibility: str = DEFAULT_NOTEBOOK_VISIBILITY
+    owner_id: Optional[str] = None
+
+
+class NotebookUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+    visibility: Optional[str] = None
+    owner_id: Optional[str] = None
+
+
+class NotebookFilesRequest(BaseModel):
+    filenames: List[str]
 
 
 class ChatMessage(BaseModel):
@@ -118,8 +156,16 @@ class ChatRequest(BaseModel):
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     top_k: Optional[int] = None
+    min_relevance_score: Optional[float] = None
+    retrieval_mode: Optional[str] = None
+    rerank_enabled: Optional[bool] = None
+    dense_candidate_k: Optional[int] = None
+    lexical_candidate_k: Optional[int] = None
+    rerank_candidate_k: Optional[int] = None
     rag_enabled: Optional[bool] = None
+    retrieval_debug: Optional[bool] = None
     filename_filter: Optional[str] = None
+    notebook_id: Optional[str] = None
     system_prompt: Optional[str] = None
 
 
@@ -147,6 +193,28 @@ def safe_join(base: Path, relative_path: str) -> Path:
 
 def text_cache_path(relative_path: str) -> Path:
     return safe_join(TEXT_DIR, f"{relative_path}.txt")
+
+
+def normalize_filenames(raw_values: Optional[List[str]]) -> List[str]:
+    if not raw_values:
+        return []
+
+    normalized: List[str] = []
+    seen = set()
+    for raw in raw_values:
+        value = normalize_relative_path(raw)
+        if value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def get_notebook_or_404(notebook_id: str) -> dict:
+    notebook = notebook_manager.get_notebook(notebook_id)
+    if notebook is None:
+        raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_id}")
+    return notebook
 
 
 def extract_text(file_path: Path) -> str:
@@ -212,6 +280,7 @@ def delete_local_file(relative_path: str) -> None:
         cache_path.unlink()
 
     delete_file_chunks(collection, relative_path)
+    notebook_manager.remove_filename_everywhere(relative_path)
 
 
 def build_chunks_for_text(text: str, chunk_size: int, overlap: int, chunk_method: str) -> List[str]:
@@ -254,6 +323,88 @@ def list_files_endpoint():
             }
         )
     return output
+
+
+@app.get("/notebooks")
+def list_notebooks_endpoint():
+    notebooks = notebook_manager.list_notebooks()
+    output = []
+    for notebook in notebooks:
+        filenames = notebook.get("filenames", [])
+        output.append(
+            {
+                **notebook,
+                "filenames": filenames,
+                "file_count": len(filenames),
+            }
+        )
+    return {"notebooks": output}
+
+
+@app.post("/notebooks")
+def create_notebook_endpoint(request: NotebookCreate):
+    try:
+        created = notebook_manager.create_notebook(
+            name=request.name,
+            description=request.description,
+            color=request.color,
+            visibility=request.visibility,
+            owner_id=request.owner_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return created
+
+
+@app.get("/notebooks/{notebook_id}")
+def get_notebook_endpoint(notebook_id: str):
+    return get_notebook_or_404(notebook_id)
+
+
+@app.patch("/notebooks/{notebook_id}")
+def update_notebook_endpoint(notebook_id: str, request: NotebookUpdate):
+    try:
+        updated = notebook_manager.update_notebook(
+            notebook_id=notebook_id,
+            name=request.name,
+            description=request.description,
+            color=request.color,
+            visibility=request.visibility,
+            owner_id=request.owner_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_id}")
+    return updated
+
+
+@app.delete("/notebooks/{notebook_id}")
+def delete_notebook_endpoint(notebook_id: str):
+    deleted = notebook_manager.delete_notebook(notebook_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_id}")
+    return {"deleted": notebook_id}
+
+
+@app.post("/notebooks/{notebook_id}/files")
+def add_notebook_files_endpoint(notebook_id: str, request: NotebookFilesRequest):
+    normalized_filenames = normalize_filenames(request.filenames)
+    updated = notebook_manager.add_files(notebook_id, normalized_filenames)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_id}")
+    return updated
+
+
+@app.delete("/notebooks/{notebook_id}/files")
+def remove_notebook_files_endpoint(notebook_id: str, request: NotebookFilesRequest):
+    normalized_filenames = normalize_filenames(request.filenames)
+    updated = notebook_manager.remove_files(notebook_id, normalized_filenames)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_id}")
+    return updated
 
 
 @app.get("/chunkers")
@@ -306,6 +457,7 @@ def rename_file(filename: str, new_name: str = Query(...)):
         old_cache.rename(new_cache)
 
     delete_file_chunks(collection, original)
+    notebook_manager.rename_filename_everywhere(original, renamed)
     return {"filename": renamed}
 
 
@@ -353,6 +505,7 @@ def preview_chunks(
         "filename": normalized,
         "chunk_method": chunk_method,
         "chunk_count": len(chunks),
+        "stats": summarize_chunks(chunks),
         "chunks": chunks,
     }
 
@@ -398,19 +551,92 @@ def search(request: SearchRequest):
         raise HTTPException(status_code=400, detail="query must not be empty")
 
     normalized_filename = normalize_relative_path(request.filename) if request.filename else None
-    matches = search_chunks(collection, query=query, top_k=max(1, request.top_k), filename=normalized_filename)
+    normalized_filenames = normalize_filenames(request.filenames)
+    min_relevance_score = (
+        request.min_relevance_score
+        if request.min_relevance_score is not None
+        else CHAT_DEFAULTS["min_relevance_score"]
+    )
+    retrieval_mode = (request.retrieval_mode or CHAT_DEFAULTS["retrieval_mode"]).strip().lower()
+    rerank_enabled = (
+        request.rerank_enabled
+        if request.rerank_enabled is not None
+        else CHAT_DEFAULTS["rerank_enabled"]
+    )
+    dense_candidate_k = (
+        request.dense_candidate_k
+        if request.dense_candidate_k is not None
+        else CHAT_DEFAULTS["dense_candidate_k"]
+    )
+    lexical_candidate_k = (
+        request.lexical_candidate_k
+        if request.lexical_candidate_k is not None
+        else CHAT_DEFAULTS["lexical_candidate_k"]
+    )
+    rerank_candidate_k = (
+        request.rerank_candidate_k
+        if request.rerank_candidate_k is not None
+        else CHAT_DEFAULTS["rerank_candidate_k"]
+    )
 
-    return {"query": query, "matches": matches, "count": len(matches)}
+    if min_relevance_score < 0 or min_relevance_score > 1:
+        raise HTTPException(status_code=400, detail="min_relevance_score must be between 0 and 1")
+    if retrieval_mode not in {"dense", "hybrid"}:
+        raise HTTPException(status_code=400, detail="retrieval_mode must be 'dense' or 'hybrid'")
+
+    if request.filenames is not None and not normalized_filenames and not normalized_filename:
+        return {"query": query, "matches": [], "count": 0, "diagnostics": None}
+
+    payload = search_chunks_with_diagnostics(
+        collection,
+        query=query,
+        top_k=max(1, request.top_k),
+        filename=normalized_filename,
+        filenames=normalized_filenames,
+        min_relevance_score=min_relevance_score,
+        retrieval_mode=retrieval_mode,
+        rerank_enabled=rerank_enabled,
+        dense_candidate_k=max(1, dense_candidate_k),
+        lexical_candidate_k=max(1, lexical_candidate_k),
+        rerank_candidate_k=max(1, rerank_candidate_k),
+    )
+    matches = payload["matches"]
+
+    response = {"query": query, "matches": matches, "count": len(matches)}
+    if request.include_debug:
+        response["diagnostics"] = payload["diagnostics"]
+    return response
 
 
 @app.get("/chunks")
 def get_chunks(
     filename: Optional[str] = Query(default=None),
+    chunk_method: Optional[str] = Query(default=None),
+    notebook_id: Optional[str] = Query(default=None),
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
     normalized_filename = normalize_relative_path(filename) if filename else None
-    result = list_chunks(collection, filename=normalized_filename, limit=limit, offset=offset)
+    notebook_filenames: List[str] = []
+    if notebook_id:
+        notebook = get_notebook_or_404(notebook_id)
+        notebook_filenames = normalize_filenames(notebook.get("filenames", []))
+        if not notebook_filenames and not normalized_filename:
+            return {
+                "items": [],
+                "count": 0,
+                "limit": limit,
+                "offset": offset,
+            }
+
+    result = list_chunks(
+        collection,
+        filename=normalized_filename,
+        filenames=notebook_filenames,
+        limit=limit,
+        offset=offset,
+        chunk_method=chunk_method,
+    )
     return {
         "items": result["items"],
         "count": result["count"],
@@ -463,14 +689,57 @@ async def chat(request: ChatRequest):
     temperature   = request.temperature   if request.temperature is not None else CHAT_DEFAULTS["temperature"]
     max_tokens    = request.max_tokens    if request.max_tokens   is not None else CHAT_DEFAULTS["max_tokens"]
     top_k         = request.top_k         if request.top_k        is not None else CHAT_DEFAULTS["top_k"]
+    min_relevance_score = (
+        request.min_relevance_score
+        if request.min_relevance_score is not None
+        else CHAT_DEFAULTS["min_relevance_score"]
+    )
     rag_enabled   = request.rag_enabled   if request.rag_enabled  is not None else CHAT_DEFAULTS["rag_enabled"]
+    retrieval_debug = (
+        request.retrieval_debug
+        if request.retrieval_debug is not None
+        else CHAT_DEFAULTS["retrieval_debug"]
+    )
     system_prompt = request.system_prompt or CHAT_DEFAULTS["system_prompt"]
+    retrieval_mode = (request.retrieval_mode or CHAT_DEFAULTS["retrieval_mode"]).strip().lower()
+    rerank_enabled = (
+        request.rerank_enabled
+        if request.rerank_enabled is not None
+        else CHAT_DEFAULTS["rerank_enabled"]
+    )
+    dense_candidate_k = (
+        request.dense_candidate_k
+        if request.dense_candidate_k is not None
+        else CHAT_DEFAULTS["dense_candidate_k"]
+    )
+    lexical_candidate_k = (
+        request.lexical_candidate_k
+        if request.lexical_candidate_k is not None
+        else CHAT_DEFAULTS["lexical_candidate_k"]
+    )
+    rerank_candidate_k = (
+        request.rerank_candidate_k
+        if request.rerank_candidate_k is not None
+        else CHAT_DEFAULTS["rerank_candidate_k"]
+    )
+
+    if min_relevance_score < 0 or min_relevance_score > 1:
+        raise HTTPException(status_code=400, detail="min_relevance_score must be between 0 and 1")
+    if retrieval_mode not in {"dense", "hybrid"}:
+        raise HTTPException(status_code=400, detail="retrieval_mode must be 'dense' or 'hybrid'")
 
     filename_filter = (
         normalize_relative_path(request.filename_filter)
         if request.filename_filter
         else None
     )
+
+    notebook_filenames: List[str] = []
+    if request.notebook_id:
+        notebook = get_notebook_or_404(request.notebook_id)
+        notebook_filenames = normalize_filenames(notebook.get("filenames", []))
+        if filename_filter and filename_filter not in notebook_filenames:
+            raise HTTPException(status_code=400, detail="filename_filter is not part of selected notebook")
 
     async def event_stream() -> AsyncIterator[str]:
         def sse(payload: dict) -> str:
@@ -479,37 +748,105 @@ async def chat(request: ChatRequest):
         try:
             # 1. RAG retrieval
             sources: list = []
-            context_block = ""
+            retrieval_diagnostics: Optional[dict] = None
+            notebook_block = ""
             if rag_enabled:
-                matches = search_chunks(
-                    collection,
-                    query=request.message,
-                    top_k=max(1, top_k),
-                    filename=filename_filter,
-                )
+                if request.notebook_id and not notebook_filenames and not filename_filter:
+                    payload = {
+                        "matches": [],
+                        "diagnostics": {
+                            "query": request.message,
+                            "retrieval_mode": retrieval_mode,
+                            "rerank_enabled": rerank_enabled,
+                            "top_k": max(1, top_k),
+                            "dense_candidate_k": max(1, dense_candidate_k),
+                            "lexical_candidate_k": max(1, lexical_candidate_k),
+                            "rerank_candidate_k": max(1, rerank_candidate_k),
+                            "min_relevance_score": min_relevance_score,
+                            "candidate_count": 0,
+                            "dropped_below_score": 0,
+                            "kept_count": 0,
+                            "returned_count": 0,
+                            "rerank_backend": "none",
+                            "stages": {
+                                "dense": {"requested_k": max(1, dense_candidate_k), "returned": 0},
+                                "lexical": {
+                                    "enabled": retrieval_mode == "hybrid",
+                                    "requested_k": max(1, lexical_candidate_k) if retrieval_mode == "hybrid" else 0,
+                                    "returned": 0,
+                                    "pool_size": 0,
+                                    "total_available": 0,
+                                },
+                                "fusion": {"input_dense": 0, "input_lexical": 0, "output": 0},
+                                "rerank": {
+                                    "enabled": rerank_enabled,
+                                    "backend": "none",
+                                    "input": 0,
+                                    "output": 0,
+                                },
+                                "threshold": {
+                                    "min_relevance_score": min_relevance_score,
+                                    "before": 0,
+                                    "after": 0,
+                                    "dropped": 0,
+                                },
+                            },
+                            "filters": {
+                                "filename": filename_filter,
+                                "filenames": notebook_filenames,
+                            },
+                            "selected_ids": [],
+                        },
+                    }
+                else:
+                    payload = search_chunks_with_diagnostics(
+                        collection,
+                        query=request.message,
+                        top_k=max(1, top_k),
+                        filename=filename_filter,
+                        filenames=notebook_filenames,
+                        min_relevance_score=min_relevance_score,
+                        retrieval_mode=retrieval_mode,
+                        rerank_enabled=rerank_enabled,
+                        dense_candidate_k=max(1, dense_candidate_k),
+                        lexical_candidate_k=max(1, lexical_candidate_k),
+                        rerank_candidate_k=max(1, rerank_candidate_k),
+                    )
+                matches = payload["matches"]
+                retrieval_diagnostics = payload.get("diagnostics")
                 sources = [
                     {
                         "id": m["id"],
                         "filename": m["filename"],
                         "chunk_index": m["chunk_index"],
+                        "chunk_method": m.get("chunk_method"),
+                        "chunk_length": m.get("chunk_length"),
                         "document": m["document"],
                         "distance": m["distance"],
+                        "score": m.get("score"),
+                        "dense_score": m.get("dense_score"),
+                        "lexical_score": m.get("lexical_score"),
+                        "fusion_score": m.get("fusion_score"),
+                        "rerank_score": m.get("rerank_score"),
                     }
                     for m in matches
                 ]
                 if sources:
-                    context_parts = []
+                    notebook_parts = []
                     for s in sources:
-                        context_parts.append(
+                        notebook_parts.append(
                             f'[Source: {s["filename"]}, chunk {s["chunk_index"]}]\n{s["document"]}'
                         )
-                    context_block = (
-                        "## Relevant context from knowledge base\n\n"
-                        + "\n\n---\n\n".join(context_parts)
+                    notebook_block = (
+                        "## Relevant notebook content from knowledge base\n\n"
+                        + "\n\n---\n\n".join(notebook_parts)
                         + "\n\n---\n\n"
                     )
 
-            yield sse({"type": "sources", "sources": sources})
+            sources_payload = {"type": "sources", "sources": sources}
+            if retrieval_debug:
+                sources_payload["retrieval"] = retrieval_diagnostics
+            yield sse(sources_payload)
 
             # 2. Build messages
             messages = [{"role": "system", "content": system_prompt}]
@@ -517,7 +854,7 @@ async def chat(request: ChatRequest):
                 if msg.role in {"user", "assistant", "system"}:
                     messages.append({"role": msg.role, "content": msg.content})
 
-            user_content = (context_block + request.message) if context_block else request.message
+            user_content = (notebook_block + request.message) if notebook_block else request.message
             messages.append({"role": "user", "content": user_content})
 
             # 3. Stream from OpenAI or Ollama

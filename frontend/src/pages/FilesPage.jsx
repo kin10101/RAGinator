@@ -5,6 +5,7 @@ import FileList from "../components/FileList"
 import FileDetail from "../components/FileDetail"
 import StatusModal from "../components/StatusModal"
 import { API_BASE_URL } from "../utils/api"
+import { useNotebooks } from "../context/NotebookProvider"
 
 const API = API_BASE_URL
 const FALLBACK_CHUNKERS = [
@@ -28,7 +29,24 @@ const FALLBACK_CHUNKERS = [
     label: "Semantic",
     description: "Uses topic-shift scoring between neighboring sentences for more natural boundaries.",
   },
+  {
+    id: "markdown",
+    label: "Heading-aware",
+    description: "Splits around headings first, then chunks each section for cleaner document structure.",
+  },
+  {
+    id: "adaptive",
+    label: "Adaptive",
+    description: "Auto-selects sentence, paragraph, or semantic chunking based on document shape.",
+  },
 ]
+
+function encodeFilePath(path) {
+  return path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")
+}
 
 function parseIntOr(value, fallback) {
   const next = Number.parseInt(value, 10)
@@ -39,6 +57,7 @@ const MIN_LEFT = 240
 const MAX_LEFT = 640
 
 export default function FilesPage() {
+  const { activeNotebook, refreshNotebooks } = useNotebooks()
   const [files, setFiles] = useState([])
   const [leftWidth, setLeftWidth] = useState(360)
   const dragging = useRef(false)
@@ -68,6 +87,7 @@ export default function FilesPage() {
   const [chunkMethods, setChunkMethods] = useState(FALLBACK_CHUNKERS)
   const [selectedChunkMethod, setSelectedChunkMethod] = useState(FALLBACK_CHUNKERS[0].id)
   const [modal, setModal] = useState(null) // { status, title, lines, onConfirm? }
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const showModal = (status, title, lines, onConfirm = null) => setModal({ status, title, lines, onConfirm })
 
@@ -129,8 +149,22 @@ export default function FilesPage() {
     }
   }, [])
 
-  const selected = selectedFilename ? files.find((f) => f.filename === selectedFilename) || null : null
-  const allSelected = files.length > 0 && selectedFiles.length === files.length
+  useEffect(() => {
+    if (!activeNotebook) return
+    setSelectedFiles((prev) => prev.filter((name) => (activeNotebook.filenames || []).includes(name)))
+    setSelectedFilename((prev) => {
+      if (!prev) return prev
+      return (activeNotebook.filenames || []).includes(prev) ? prev : null
+    })
+  }, [activeNotebook])
+
+  const visibleFiles = activeNotebook
+    ? files.filter((file) => (activeNotebook.filenames || []).includes(file.filename))
+    : []
+  const selected = selectedFilename ? visibleFiles.find((f) => f.filename === selectedFilename) || null : null
+  const visibleNames = new Set(visibleFiles.map((file) => file.filename))
+  const selectedVisibleCount = selectedFiles.filter((name) => visibleNames.has(name)).length
+  const allSelected = visibleFiles.length > 0 && selectedVisibleCount === visibleFiles.length
   const selectedChunker = chunkMethods.find((item) => item.id === selectedChunkMethod) || chunkMethods[0] || FALLBACK_CHUNKERS[0]
 
   const toggleSelectFile = (filename) => {
@@ -140,8 +174,8 @@ export default function FilesPage() {
   }
 
   const toggleSelectAll = () => {
-    setSelectedFiles((prev) =>
-      files.length > 0 && prev.length === files.length ? [] : files.map((f) => f.filename)
+    setSelectedFiles(() =>
+      visibleFiles.length > 0 && selectedVisibleCount === visibleFiles.length ? [] : visibleFiles.map((f) => f.filename)
     )
   }
 
@@ -166,6 +200,14 @@ export default function FilesPage() {
     const chunkSizeValue = Math.max(50, parseIntOr(chunkSize, 800))
     const overlapValue = Math.max(0, parseIntOr(overlap, 120))
     markEmbedStatus(filenames, "embedding")
+    setModal({
+      status: "loading",
+      title: "Embedding in progress",
+      lines: [
+        `${filenames.length} file(s) are being chunked and embedded.`,
+        "Please wait while vectors are generated.",
+      ],
+    })
     try {
       const res = await axios.post(`${API}/files/embed`, {
         filenames,
@@ -189,6 +231,8 @@ export default function FilesPage() {
       console.error("Embed failed:", err)
       markEmbedStatus(filenames, "error")
       return { ok: false }
+    } finally {
+      setModal(null)
     }
   }
 
@@ -242,6 +286,58 @@ export default function FilesPage() {
     }
   }
 
+  const handlePreviewSelected = async () => {
+    if (!selectedFilename) {
+      showModal("error", "No file selected", ["Pick a file first, then preview its chunks."])
+      return
+    }
+
+    const chunkSizeValue = Math.max(50, parseIntOr(chunkSize, 800))
+    const overlapValue = Math.max(0, parseIntOr(overlap, 120))
+    try {
+      const res = await axios.post(`${API}/files/${encodeFilePath(selectedFilename)}/chunks`, null, {
+        params: {
+          chunk_size: chunkSizeValue,
+          overlap: overlapValue,
+          chunk_method: selectedChunkMethod,
+        },
+      })
+      const chunks = Array.isArray(res.data?.chunks) ? res.data.chunks : []
+      const stats = res.data?.stats || {}
+      const preview = chunks.slice(0, 3).map((chunk, index) => {
+        const clipped = chunk.length > 180 ? `${chunk.slice(0, 180)}...` : chunk
+        return `${index + 1}. ${clipped}`
+      })
+
+      showModal("success", "Chunk preview", [
+        `File: ${selectedFilename}`,
+        `Method: ${selectedChunker.label}`,
+        `Chunks: ${stats.count ?? chunks.length} | Avg length: ${stats.avg_length ?? 0} chars | Median: ${stats.median_length ?? 0} chars`,
+        ...preview,
+      ])
+    } catch (err) {
+      console.error("Chunk preview failed:", err)
+      showModal("error", "Chunk preview failed", ["Could not generate preview chunks.", "Check backend logs for details."])
+    }
+  }
+
+  const handleUpload = async (uploadedFilenames = []) => {
+    if (!activeNotebook) {
+      showModal("error", "No notebook selected", ["Select a notebook first.", "Uploads are assigned to the active notebook."])
+      return
+    }
+
+    if (uploadedFilenames.length) {
+      try {
+        await axios.post(`${API}/notebooks/${activeNotebook.id}/files`, { filenames: uploadedFilenames })
+        await refreshNotebooks()
+      } catch (err) {
+        console.error("Failed to assign files to notebook:", err)
+      }
+    }
+    await fetchFiles()
+  }
+
   return (
     <div className="page">
       <StatusModal
@@ -249,59 +345,31 @@ export default function FilesPage() {
         status={modal?.status}
         title={modal?.title}
         lines={modal?.lines}
-        onClose={() => setModal(null)}
+        onClose={modal?.status === "loading" ? undefined : () => setModal(null)}
         onConfirm={modal?.onConfirm}
       />
       <div className="topbar">
         <div className="topbar-title">Files</div>
-        <div
-          style={{
-            width: "1px",
-            height: "20px",
-            background: "var(--border2)",
-            margin: "0 4px",
-            flexShrink: 0,
-          }}
-        />
-        <div className="chunk-controls">
-          <label>
-            Method
-            <select
-              className="select"
-              value={selectedChunkMethod}
-              onChange={(e) => setSelectedChunkMethod(e.target.value)}
-              title={selectedChunker?.description || "Chunking method"}
-              style={{ minWidth: "170px", height: "28px" }}
-            >
-              {chunkMethods.map((method) => (
-                <option key={method.id} value={method.id}>
-                  {method.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Chunk size
-            <input
-              type="number"
-              min="50"
-              value={chunkSize}
-              onChange={(e) => setChunkSize(e.target.value)}
-              style={{ width: "72px" }}
-            />
-          </label>
-          <label>
-            Overlap
-            <input
-              type="number"
-              min="0"
-              value={overlap}
-              onChange={(e) => setOverlap(e.target.value)}
-              style={{ width: "64px" }}
-            />
-          </label>
-        </div>
+        {activeNotebook ? (
+          <span className="status-chip embedding" title="Active notebook">
+            Notebook: {activeNotebook.name}
+          </span>
+        ) : (
+          <span className="status-chip error" title="Select a notebook from the Notebook Select page">
+            No notebook selected
+          </span>
+        )}
         <div className="topbar-actions">
+          <button
+            className={`btn ${settingsOpen ? "btn-primary" : ""}`}
+            onClick={() => setSettingsOpen((open) => !open)}
+            type="button"
+          >
+            Chunk Settings
+          </button>
+          <button className="btn" type="button" onClick={handlePreviewSelected} disabled={!selectedFilename}>
+            Preview Selected
+          </button>
           {selectedFiles.length > 0 && (
             <>
               <button className="btn btn-embed" onClick={handleBulkEmbed} type="button">
@@ -328,7 +396,7 @@ export default function FilesPage() {
             flexShrink: 0,
           }}
         >
-          <FileUpload API={API} onUpload={fetchFiles} />
+          <FileUpload API={API} onUpload={handleUpload} disabled={!activeNotebook} />
           <div className="section-label" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <input
               type="checkbox"
@@ -336,11 +404,16 @@ export default function FilesPage() {
               onChange={toggleSelectAll}
               style={{ accentColor: "var(--accent)", cursor: "pointer" }}
             />
-            Uploaded Files ({selectedFiles.length}/{files.length})
+            Uploaded Files ({selectedVisibleCount}/{visibleFiles.length})
           </div>
+          {!activeNotebook && (
+            <div style={{ color: "var(--muted)", fontSize: "12px", marginBottom: "8px" }}>
+              Select a notebook on the Notebook Select page to view and upload files.
+            </div>
+          )}
           <div style={{ flex: 1, overflowY: "auto" }}>
             <FileList
-              files={files}
+              files={visibleFiles}
               onSelect={(f) => setSelectedFilename(f.filename)}
               selectedFile={selected}
               selectedFiles={selectedFiles}
@@ -367,28 +440,92 @@ export default function FilesPage() {
         <div
           style={{
             flex: 1,
-            padding: "24px",
-            overflowY: "auto",
+            overflow: "hidden",
             display: "flex",
+            position: "relative",
             flexDirection: "column",
           }}
         >
-          {selected ? (
-            <FileDetail
-              key={selected.filename}
-              API={API}
-              file={selected}
-              onClose={() => setSelectedFilename(null)}
-              onRefresh={fetchFiles}
-              onEmbed={handleSingleEmbed}
-            />
+          <div
+            style={{
+              flex: 1,
+              padding: "24px",
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {selected ? (
+              <FileDetail
+                key={selected.filename}
+                API={API}
+                file={selected}
+                onClose={() => setSelectedFilename(null)}
+                onRefresh={fetchFiles}
+                onEmbed={handleSingleEmbed}
+              />
+            ) : (
+              <div style={{ margin: "auto", color: "var(--muted)", textAlign: "center" }}>
+                <p style={{ fontSize: "14px", fontWeight: 500 }}>No file selected</p>
+                <p style={{ fontSize: "12px", marginTop: "8px" }}>
+                  Select a document to preview it, then chunk and embed into the RAG vector store with {selectedChunker.label.toLowerCase()} mode.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {settingsOpen ? (
+            <aside className="files-settings-panel">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span className="section-label" style={{ marginBottom: 0 }}>Chunk Settings</span>
+                <button className="btn" type="button" onClick={() => setSettingsOpen(false)}>Close</button>
+              </div>
+              <div className="chunk-controls" style={{ flexDirection: "column", alignItems: "stretch", gap: "10px" }}>
+                <label style={{ justifyContent: "space-between" }}>
+                  Method
+                  <select
+                    className="select"
+                    value={selectedChunkMethod}
+                    onChange={(e) => setSelectedChunkMethod(e.target.value)}
+                    title={selectedChunker?.description || "Chunking method"}
+                    style={{ minWidth: "100%", height: "32px" }}
+                  >
+                    {chunkMethods.map((method) => (
+                      <option key={method.id} value={method.id}>
+                        {method.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ justifyContent: "space-between" }}>
+                  Chunk size
+                  <input
+                    type="number"
+                    min="50"
+                    value={chunkSize}
+                    onChange={(e) => setChunkSize(e.target.value)}
+                    style={{ width: "100%" }}
+                  />
+                </label>
+                <label style={{ justifyContent: "space-between" }}>
+                  Overlap
+                  <input
+                    type="number"
+                    min="0"
+                    value={overlap}
+                    onChange={(e) => setOverlap(e.target.value)}
+                    style={{ width: "100%" }}
+                  />
+                </label>
+                <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: 1.5 }}>
+                  {selectedChunker?.description}
+                </div>
+              </div>
+            </aside>
           ) : (
-            <div style={{ margin: "auto", color: "var(--muted)", textAlign: "center" }}>
-              <p style={{ fontSize: "14px", fontWeight: 500 }}>No file selected</p>
-              <p style={{ fontSize: "12px", marginTop: "8px" }}>
-                Select a document to preview it, then chunk and embed into the RAG vector store with {selectedChunker.label.toLowerCase()} mode.
-              </p>
-            </div>
+            <button className="files-settings-tab" type="button" onClick={() => setSettingsOpen(true)}>
+              Chunk Settings
+            </button>
           )}
         </div>
       </div>

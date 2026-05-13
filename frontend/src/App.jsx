@@ -3,6 +3,8 @@ import { useState, useCallback, useRef } from "react"
 import FilesPage from "./pages/FilesPage"
 import ChunksPage from "./pages/ChunksPage"
 import ChatPage from "./pages/ChatPage"
+import NotebooksPage from "./pages/NotebooksPage"
+import { useNotebooks } from "./context/NotebookProvider"
 
 const FileIcon = () => (
   <svg className="nav-icon" viewBox="0 0 16 16" fill="none">
@@ -27,12 +29,22 @@ const ChatIcon = () => (
   </svg>
 )
 
+const ContextIcon = () => (
+  <svg className="nav-icon" viewBox="0 0 16 16" fill="none">
+    <rect x="2" y="3" width="12" height="10" rx="2" stroke="currentColor" strokeWidth="1.2" />
+    <circle cx="5" cy="8" r="1.1" fill="currentColor" />
+    <circle cx="8" cy="8" r="1.1" fill="currentColor" opacity="0.75" />
+    <circle cx="11" cy="8" r="1.1" fill="currentColor" opacity="0.55" />
+  </svg>
+)
+
 const MIN_WIDTH = 140
 const MAX_WIDTH = 400
 
 const COLLAPSED_WIDTH = 48
 
 export default function App() {
+  const { activeNotebook } = useNotebooks()
   const [sidebarWidth, setSidebarWidth] = useState(210)
   const [collapsed, setCollapsed] = useState(false)
   const dragging = useRef(false)
@@ -55,13 +67,13 @@ export default function App() {
     }
     window.addEventListener("mousemove", onMove)
     window.addEventListener("mouseup", onUp)
-  }, [sidebarWidth])
+  }, [collapsed, sidebarWidth])
 
   return (
     <div className="app-shell">
       <nav className={`sidebar${collapsed ? " sidebar-collapsed" : ""}`} style={{ width: collapsed ? COLLAPSED_WIDTH : sidebarWidth }}>
         <div className="sidebar-brand">
-          {!collapsed && <>RAG<span>ginator</span></>}
+          {!collapsed && <>Doc<span>talk</span></>}
           <button
             className="sidebar-toggle"
             onClick={() => setCollapsed((c) => !c)}
@@ -72,7 +84,10 @@ export default function App() {
             </svg>
           </button>
         </div>
-        <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Files">
+        <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Notebook Select">
+          <ContextIcon /> {!collapsed && "Notebook Select"}
+        </NavLink>
+        <NavLink to="/files" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Files">
           <FileIcon /> {!collapsed && "Files"}
         </NavLink>
         <NavLink to="/chunks" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Chunks">
@@ -81,11 +96,18 @@ export default function App() {
         <NavLink to="/chat" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Chat">
           <ChatIcon /> {!collapsed && "Chat"}
         </NavLink>
-        {!collapsed && <div className="sidebar-footer">Made by Don 😎</div>}
+        {!collapsed && activeNotebook && (
+          <div className="sidebar-notebook-chip" title={activeNotebook.name}>
+            Notebook: {activeNotebook.name}
+          </div>
+        )}
+        {!collapsed && <div className="sidebar-footer">Talk to your Documents!
+          Made by Don 😎</div>}
       </nav>
       <div className="sidebar-resizer" onMouseDown={onMouseDown} />
       <Routes>
-        <Route path="/" element={<FilesPage />} />
+        <Route path="/" element={<NotebooksPage />} />
+        <Route path="/files" element={<FilesPage />} />
         <Route path="/chunks" element={<ChunksPage />} />
         <Route path="/chat" element={<ChatPage />} />
       </Routes>

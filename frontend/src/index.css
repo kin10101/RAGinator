@@ -196,6 +196,21 @@ input[type="checkbox"]:checked::after {
   color: var(--muted);
 }
 
+.sidebar-notebook-chip {
+  margin-top: 10px;
+  margin-left: 14px;
+  margin-right: 14px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(79, 124, 255, 0.45);
+  color: #9db5ff;
+  background: rgba(79, 124, 255, 0.12);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── Page frame ── */
 .page { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
@@ -327,6 +342,7 @@ input[type="checkbox"]:checked::after {
   margin: 0;
 }
 .chunk-controls input[type="number"] {
+  appearance: textfield;
   -moz-appearance: textfield;
 }
 
@@ -425,9 +441,11 @@ input[type="checkbox"]:checked::after {
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
+  line-clamp: 8;
   -webkit-line-clamp: 8;
 }
 .chunk-text.expanded {
+  line-clamp: unset;
   -webkit-line-clamp: unset;
   display: block;
 }
@@ -460,7 +478,27 @@ input[type="checkbox"]:checked::after {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  transform-origin: right center;
+  animation: chat-settings-panel-in 180ms cubic-bezier(0.18, 0.88, 0.28, 1);
 }
+
+@keyframes chat-settings-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-settings-panel {
+    animation: none;
+  }
+}
+
 .chat-settings-header {
   display: flex;
   align-items: center;
@@ -809,3 +847,98 @@ input[type="checkbox"]:checked::after {
 .chat-send-btn:hover:not(:disabled) { opacity: 0.88; transform: scale(1.06); }
 .chat-send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .chat-send-btn.btn-danger { background: var(--danger); }
+
+.modal-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid rgba(79, 124, 255, 0.2);
+  border-top-color: var(--accent);
+  animation: modal-spin 0.8s linear infinite;
+}
+
+@keyframes modal-spin {
+  to { transform: rotate(360deg); }
+}
+
+.files-settings-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 280px;
+  z-index: 20;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-shadow: -8px 0 20px rgba(0, 0, 0, 0.25);
+  transform-origin: right center;
+  animation: files-settings-panel-in 180ms cubic-bezier(0.18, 0.88, 0.28, 1);
+}
+
+.files-settings-panel .chunk-controls label {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  white-space: normal;
+  min-width: 0;
+}
+
+.files-settings-panel .chunk-controls .select,
+.files-settings-panel .chunk-controls input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.files-settings-tab {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  border-radius: 8px 0 0 8px;
+  border: 1px solid var(--border2);
+  border-right: none;
+  background: var(--surface2);
+  color: var(--muted);
+  padding: 8px 6px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.files-settings-tab:hover {
+  transform: translateY(-50%) translateX(-2px);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+@keyframes files-settings-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .files-settings-panel {
+    animation: none;
+  }
+
+  .files-settings-tab {
+    transition: none;
+  }
+}

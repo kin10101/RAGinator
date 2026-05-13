@@ -1,0 +1,25 @@
+[
+  {
+    "query": "What does the student handbook say about attendance?",
+    "expected_filenames": [
+      "Student-Handbook-2024_v2.pdf"
+    ],
+    "top_k": 5,
+    "min_relevance_score": 0.2
+  },
+  {
+    "query": "When is my passport appointment?",
+    "expected_filenames": [
+      "passport appointment.txt"
+    ],
+    "top_k": 5
+  },
+  {
+    "query": "Show details from EPM probationary appraisal form",
+    "expected_filenames": [
+      "EPM_Probationary_Appraisal_Form Don_Perez.txt",
+      "SIGNED_EPM_Probationary_Appraisal_Form Don_Perez.txt"
+    ],
+    "top_k": 8
+  }
+]

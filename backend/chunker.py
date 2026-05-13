@@ -30,6 +30,16 @@ CHUNK_METHODS: List[Dict[str, str]] = [
         "label": "Semantic",
         "description": "Uses topic-shift scoring between neighboring sentences for more natural boundaries.",
     },
+    {
+        "id": "markdown",
+        "label": "Heading-aware",
+        "description": "Splits around headings first, then chunks each section for cleaner document structure.",
+    },
+    {
+        "id": "adaptive",
+        "label": "Adaptive",
+        "description": "Auto-selects sentence, paragraph, or semantic chunking based on document shape.",
+    },
 ]
 
 _CHUNK_METHOD_IDS = {item["id"] for item in CHUNK_METHODS}
@@ -58,6 +68,52 @@ def _split_sentences(text: str) -> List[str]:
 def _split_paragraphs(text: str) -> List[str]:
     parts = re.split(r"\n\s*\n+", text)
     return [part.strip() for part in parts if part and part.strip()]
+
+
+def _looks_like_heading(line: str) -> bool:
+    stripped = (line or "").strip()
+    if not stripped:
+        return False
+
+    if re.match(r"^#{1,6}\s+", stripped):
+        return True
+    if re.match(r"^(chapter|section|part)\b", stripped, flags=re.IGNORECASE):
+        return True
+
+    alpha_count = sum(ch.isalpha() for ch in stripped)
+    if alpha_count == 0 or len(stripped) > 90:
+        return False
+
+    upper_ratio = sum(ch.isupper() for ch in stripped if ch.isalpha()) / alpha_count
+    return upper_ratio >= 0.8 and len(stripped.split()) <= 12
+
+
+def _split_heading_sections(text: str) -> List[str]:
+    lines = text.splitlines()
+    if not lines:
+        return []
+
+    sections: List[str] = []
+    current: List[str] = []
+    has_heading = False
+
+    for line in lines:
+        if _looks_like_heading(line):
+            has_heading = True
+            if current:
+                section = "\n".join(current).strip()
+                if section:
+                    sections.append(section)
+            current = [line.strip()]
+            continue
+        current.append(line)
+
+    if current:
+        section = "\n".join(current).strip()
+        if section:
+            sections.append(section)
+
+    return sections if has_heading else []
 
 
 def _joined_length(units: Sequence[str], separator: str) -> int:
@@ -212,6 +268,65 @@ def _semantic_segments(sentences: Sequence[str], chunk_size: int, _embed_texts: 
     return segments
 
 
+def _markdown_chunks(text: str, chunk_size: int, overlap: int, embed_texts: ChunkEmbedder | None) -> List[str]:
+    sections = _split_heading_sections(text)
+    if not sections:
+        sections = _split_paragraphs(text) or [text]
+
+    normalized_sections: List[str] = []
+    for section in sections:
+        if len(section) <= chunk_size:
+            normalized_sections.append(section)
+            continue
+
+        sentences = _split_sentences(section)
+        semantic_units = _semantic_segments(sentences, chunk_size=chunk_size, _embed_texts=embed_texts)
+        normalized_sections.extend(_group_units(semantic_units, "\n\n", chunk_size=chunk_size, overlap=overlap))
+
+    return _group_units(normalized_sections, "\n\n", chunk_size=chunk_size, overlap=overlap)
+
+
+def _adaptive_method(text: str, chunk_size: int) -> str:
+    heading_sections = _split_heading_sections(text)
+    paragraph_count = len(_split_paragraphs(text))
+    sentence_count = len(_split_sentences(text))
+
+    if heading_sections and len(heading_sections) >= 3:
+        return "markdown"
+    if paragraph_count >= 6 and sentence_count < 40:
+        return "paragraph"
+    if sentence_count >= max(18, chunk_size // 70):
+        return "semantic"
+    return "sentence"
+
+
+def summarize_chunks(chunks: Sequence[str]) -> Dict[str, float | int]:
+    lengths = [len(chunk) for chunk in chunks if chunk]
+    if not lengths:
+        return {
+            "count": 0,
+            "avg_length": 0,
+            "median_length": 0,
+            "min_length": 0,
+            "max_length": 0,
+        }
+
+    ordered = sorted(lengths)
+    mid = len(ordered) // 2
+    if len(ordered) % 2 == 0:
+        median = int((ordered[mid - 1] + ordered[mid]) / 2)
+    else:
+        median = ordered[mid]
+
+    return {
+        "count": len(lengths),
+        "avg_length": int(sum(lengths) / len(lengths)),
+        "median_length": median,
+        "min_length": ordered[0],
+        "max_length": ordered[-1],
+    }
+
+
 def chunk_text(
     text: str,
     chunk_size: int = 800,
@@ -237,6 +352,19 @@ def chunk_text(
     if selected_method == "paragraph":
         paragraphs = _split_paragraphs(cleaned) or [cleaned]
         return _group_units(paragraphs, "\n\n", chunk_size=chunk_size, overlap=overlap)
+
+    if selected_method == "markdown":
+        return _markdown_chunks(cleaned, chunk_size=chunk_size, overlap=overlap, embed_texts=embed_texts)
+
+    if selected_method == "adaptive":
+        method = _adaptive_method(cleaned, chunk_size=chunk_size)
+        return chunk_text(
+            cleaned,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            method=method,
+            embed_texts=embed_texts,
+        )
 
     sentences = _split_sentences(cleaned) or [cleaned]
     semantic_units = _semantic_segments(sentences, chunk_size=chunk_size, _embed_texts=embed_texts)

@@ -9,13 +9,14 @@ function mapFilesWithRelativePaths(fileList) {
   }))
 }
 
-export default function FileUpload({ API, onUpload }) {
+export default function FileUpload({ API, onUpload, disabled = false }) {
   const filesInputRef = useRef()
   const folderInputRef = useRef()
   const [uploading, setUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
 
   const uploadBatch = async (entries) => {
+    if (disabled) return
     if (!entries.length) return
     setUploading(true)
     try {
@@ -24,8 +25,10 @@ export default function FileUpload({ API, onUpload }) {
         form.append("files", file)
         form.append("relative_paths", relativePath)
       })
-      await axios.post(`${API}/files/batch`, form)
-      await onUpload()
+      const res = await axios.post(`${API}/files/batch`, form)
+      const uploaded = Array.isArray(res.data?.uploaded) ? res.data.uploaded : []
+      const uploadedFilenames = uploaded.map((item) => item.filename).filter(Boolean)
+      await onUpload?.(uploadedFilenames)
     } catch (err) {
       console.error("Upload failed:", err)
     } finally {
@@ -34,6 +37,7 @@ export default function FileUpload({ API, onUpload }) {
   }
 
   const handleDrop = (e) => {
+    if (disabled) return
     e.preventDefault()
     setDragOver(false)
     uploadBatch(mapFilesWithRelativePaths(e.dataTransfer.files))
@@ -43,6 +47,7 @@ export default function FileUpload({ API, onUpload }) {
     <div
       onDrop={handleDrop}
       onDragOver={(e) => {
+        if (disabled) return
         e.preventDefault()
         setDragOver(true)
       }}
@@ -54,17 +59,18 @@ export default function FileUpload({ API, onUpload }) {
         textAlign: "center",
         marginBottom: "16px",
         background: dragOver ? "rgba(79,124,255,0.05)" : "transparent",
+        opacity: disabled ? 0.55 : 1,
         transition: "all 0.15s",
       }}
     >
       <div className="section-label" style={{ marginBottom: 6 }}>
-        {uploading ? "Uploading..." : "Drop files/folder or use buttons"}
+        {disabled ? "Select a notebook to enable uploads" : (uploading ? "Uploading..." : "Drop files/folder or use buttons")}
       </div>
       <div style={{ display: "flex", gap: "8px", justifyContent: "center", marginBottom: "8px" }}>
         <button
           className="btn btn-primary"
           onClick={() => filesInputRef.current?.click()}
-          disabled={uploading}
+          disabled={uploading || disabled}
           type="button"
         >
           Upload Files
@@ -72,7 +78,7 @@ export default function FileUpload({ API, onUpload }) {
         <button
           className="btn"
           onClick={() => folderInputRef.current?.click()}
-          disabled={uploading}
+          disabled={uploading || disabled}
           type="button"
         >
           Upload Folder
