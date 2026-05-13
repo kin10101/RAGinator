@@ -553,6 +553,7 @@ input[type="checkbox"]:checked::after {
 }
 .chat-settings-textarea {
   width: 100%;
+  min-height: 180px;
   background: var(--surface2);
   color: var(--text);
   border: 1px solid var(--border2);
