@@ -158,6 +158,11 @@ export default function FilesPage() {
     })
   }, [activeNotebook])
 
+  useEffect(() => {
+    if (!activeNotebook) return
+    fetchFiles()
+  }, [activeNotebook, fetchFiles])
+
   const visibleFiles = activeNotebook
     ? files.filter((file) => (activeNotebook.filenames || []).includes(file.filename))
     : []

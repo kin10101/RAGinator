@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import AsyncIterator, List, Optional
+from datetime import datetime, timezone
 
 import aiofiles
 from docx import Document as DocxDocument
@@ -15,7 +16,13 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from chunker import DEFAULT_CHUNK_METHOD, chunk_text, list_chunk_methods, summarize_chunks
-from notebooks import NotebookManager, DEFAULT_NOTEBOOK_COLOR, DEFAULT_NOTEBOOK_VISIBILITY
+from gdrive_connector import GoogleDriveSyncError, download_public_folder
+from notebooks import (
+    NotebookManager,
+    DEFAULT_NOTEBOOK_COLOR,
+    DEFAULT_NOTEBOOK_VISIBILITY,
+    DEFAULT_NOTEBOOK_SOURCE_TYPE,
+)
 from vectordb import (
     build_embeddings,
     delete_file_chunks,
@@ -127,6 +134,8 @@ class NotebookCreate(BaseModel):
     color: str = DEFAULT_NOTEBOOK_COLOR
     visibility: str = DEFAULT_NOTEBOOK_VISIBILITY
     owner_id: Optional[str] = None
+    source_type: str = DEFAULT_NOTEBOOK_SOURCE_TYPE
+    source_url: str = ""
 
 
 class NotebookUpdate(BaseModel):
@@ -135,6 +144,15 @@ class NotebookUpdate(BaseModel):
     color: Optional[str] = None
     visibility: Optional[str] = None
     owner_id: Optional[str] = None
+    source_type: Optional[str] = None
+    source_url: Optional[str] = None
+
+
+class NotebookSyncRequest(BaseModel):
+    chunk_size: int = 800
+    overlap: int = 120
+    chunk_method: str = DEFAULT_CHUNK_METHOD
+    auto_embed: bool = True
 
 
 class NotebookFilesRequest(BaseModel):
@@ -260,6 +278,19 @@ async def save_upload(file: UploadFile, relative_path: str) -> str:
     return normalized_path
 
 
+def save_bytes_upload(content: bytes, relative_path: str) -> str:
+    normalized_path = normalize_relative_path(relative_path)
+    destination = safe_join(UPLOAD_DIR, normalized_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(content)
+
+    extracted_text = extract_text(destination)
+    cache_path = text_cache_path(normalized_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(extracted_text, encoding="utf-8")
+    return normalized_path
+
+
 def iterate_uploaded_files() -> List[str]:
     files: List[str] = []
     for path in UPLOAD_DIR.rglob("*"):
@@ -350,6 +381,8 @@ def create_notebook_endpoint(request: NotebookCreate):
             color=request.color,
             visibility=request.visibility,
             owner_id=request.owner_id,
+            source_type=request.source_type,
+            source_url=request.source_url,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -372,6 +405,8 @@ def update_notebook_endpoint(notebook_id: str, request: NotebookUpdate):
             color=request.color,
             visibility=request.visibility,
             owner_id=request.owner_id,
+            source_type=request.source_type,
+            source_url=request.source_url,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -387,6 +422,119 @@ def delete_notebook_endpoint(notebook_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_id}")
     return {"deleted": notebook_id}
+
+
+@app.post("/notebooks/{notebook_id}/sync")
+def sync_notebook_endpoint(notebook_id: str, request: NotebookSyncRequest):
+    notebook = get_notebook_or_404(notebook_id)
+    source_type = (notebook.get("source_type") or DEFAULT_NOTEBOOK_SOURCE_TYPE).strip().lower()
+    source_url = (notebook.get("source_url") or "").strip()
+
+    if source_type != "google_drive":
+        raise HTTPException(status_code=400, detail="Sync is only supported for Google Drive notebooks in this version")
+    if not source_url:
+        raise HTTPException(status_code=400, detail="Notebook source_url is required for sync")
+
+    notebook_manager.update_sync_state(
+        notebook_id,
+        sync_status="syncing",
+        last_sync_error="",
+    )
+
+    try:
+        artifacts = download_public_folder(source_url)
+    except GoogleDriveSyncError as exc:
+        notebook_manager.update_sync_state(
+            notebook_id,
+            sync_status="error",
+            last_sync_error=str(exc),
+            last_sync_stats={"added": 0, "updated": 0, "removed": 0, "embedded": 0},
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raw_message = str(exc).strip()
+        message = f"{exc.__class__.__name__}: {raw_message}" if raw_message else exc.__class__.__name__
+        notebook_manager.update_sync_state(
+            notebook_id,
+            sync_status="error",
+            last_sync_error=message,
+            last_sync_stats={"added": 0, "updated": 0, "removed": 0, "embedded": 0},
+        )
+        raise HTTPException(status_code=502, detail=message) from exc
+
+    previous_connector_files = normalize_filenames(notebook.get("connector_filenames", []))
+    previous_connector_set = set(previous_connector_files)
+
+    synced_filenames: List[str] = []
+    embedded_total = 0
+    added = 0
+    updated = 0
+
+    for item in artifacts:
+        provider_relative = str(item.get("relative_path") or "")
+        content = item.get("content")
+        if not isinstance(content, (bytes, bytearray)):
+            continue
+
+        candidate_path = f"gdrive/{notebook_id}/{provider_relative}"
+        normalized = save_bytes_upload(bytes(content), candidate_path)
+
+        if normalized in previous_connector_set:
+            updated += 1
+        else:
+            added += 1
+
+        synced_filenames.append(normalized)
+
+        if request.auto_embed:
+            source = safe_join(UPLOAD_DIR, normalized)
+            try:
+                chunks = build_chunks_for_text(
+                    extract_text(source),
+                    chunk_size=request.chunk_size,
+                    overlap=request.overlap,
+                    chunk_method=request.chunk_method,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            delete_file_chunks(collection, normalized)
+            embedded_total += upsert_file_chunks(collection, normalized, chunks, chunk_method=request.chunk_method)
+
+    synced_unique = list(dict.fromkeys(synced_filenames))
+    synced_set = set(synced_unique)
+    stale = [name for name in previous_connector_files if name not in synced_set]
+
+    for stale_name in stale:
+        target = safe_join(UPLOAD_DIR, stale_name)
+        if target.exists() and target.is_file():
+            delete_local_file(stale_name)
+
+    notebook_manager.remove_files(notebook_id, stale)
+    notebook_manager.add_files(notebook_id, synced_unique)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    stats = {
+        "added": added,
+        "updated": updated,
+        "removed": len(stale),
+        "embedded": embedded_total,
+        "total_files": len(synced_unique),
+    }
+    updated_notebook = notebook_manager.update_sync_state(
+        notebook_id,
+        sync_status="ok",
+        synced_at=now_iso,
+        last_sync_error="",
+        last_sync_stats=stats,
+        connector_filenames=synced_unique,
+    )
+
+    return {
+        "notebook": updated_notebook,
+        "stats": stats,
+        "files": synced_unique,
+    }
 
 
 @app.post("/notebooks/{notebook_id}/files")

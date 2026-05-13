@@ -11,6 +11,11 @@ const VISIBILITY_OPTIONS = [
   { value: "public", label: "Public" },
 ]
 
+const SOURCE_OPTIONS = [
+  { value: "manual", label: "Manual" },
+  { value: "google_drive", label: "Google Drive" },
+]
+
 function NotebookForm({ value, onChange, onSubmit, submitting, submitLabel }) {
   return (
     <div
@@ -39,6 +44,28 @@ function NotebookForm({ value, onChange, onSubmit, submitting, submitLabel }) {
           placeholder="Short notes"
         />
       </label>
+      <label style={{ display: "flex", flexDirection: "column", gap: "6px", minWidth: 0 }}>
+        <span className="section-label" style={{ marginBottom: 0 }}>Source</span>
+        <select
+          className="select"
+          value={value.source_type}
+          onChange={(e) => onChange({ ...value, source_type: e.target.value })}
+          style={{ minWidth: "120px", width: "100%" }}
+        >
+          {SOURCE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+        </select>
+      </label>
+      {value.source_type === "google_drive" && (
+        <label style={{ display: "flex", flexDirection: "column", gap: "6px", minWidth: 0 }}>
+          <span className="section-label" style={{ marginBottom: 0 }}>Google Drive Folder URL</span>
+          <input
+            className="input"
+            value={value.source_url}
+            onChange={(e) => onChange({ ...value, source_url: e.target.value })}
+            placeholder="https://drive.google.com/drive/folders/..."
+          />
+        </label>
+      )}
       <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", minWidth: 0 }}>
         <input
           type="color"
@@ -69,9 +96,24 @@ export default function NotebooksPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [editingId, setEditingId] = useState("")
   const [saving, setSaving] = useState(false)
+  const [syncingId, setSyncingId] = useState("")
   const [error, setError] = useState("")
-  const [editDraft, setEditDraft] = useState({ name: "", description: "", color: "#4f7cff", visibility: "private" })
-  const [draft, setDraft] = useState({ name: "", description: "", color: "#4f7cff", visibility: "private" })
+  const [editDraft, setEditDraft] = useState({
+    name: "",
+    description: "",
+    color: "#4f7cff",
+    visibility: "private",
+    source_type: "manual",
+    source_url: "",
+  })
+  const [draft, setDraft] = useState({
+    name: "",
+    description: "",
+    color: "#4f7cff",
+    visibility: "private",
+    source_type: "manual",
+    source_url: "",
+  })
 
   const createNotebook = async () => {
     setSaving(true)
@@ -79,7 +121,14 @@ export default function NotebooksPage() {
     try {
       await axios.post(`${API}/notebooks`, draft)
       await refreshNotebooks()
-      setDraft({ name: "", description: "", color: "#4f7cff", visibility: "private" })
+      setDraft({
+        name: "",
+        description: "",
+        color: "#4f7cff",
+        visibility: "private",
+        source_type: "manual",
+        source_url: "",
+      })
       setCreateOpen(false)
     } catch (err) {
       setError(err?.response?.data?.detail || "Failed to create notebook")
@@ -114,6 +163,22 @@ export default function NotebooksPage() {
       setError(err?.response?.data?.detail || "Failed to delete notebook")
     } finally {
       setSaving(false)
+    }
+  }
+
+  const syncNotebook = async (notebook) => {
+    setError("")
+    setSyncingId(notebook.id)
+    try {
+      await axios.post(`${API}/notebooks/${notebook.id}/sync`, {})
+      await refreshNotebooks()
+      if (activeNotebookId !== notebook.id) {
+        setActiveNotebookId(notebook.id)
+      }
+    } catch (err) {
+      setError(err?.response?.data?.detail || "Failed to sync notebook")
+    } finally {
+      setSyncingId("")
     }
   }
 
@@ -177,6 +242,14 @@ export default function NotebooksPage() {
                   <span className={`status-chip ${notebook.visibility === "public" ? "embedding" : "idle"}`}>
                     {notebook.visibility || "private"}
                   </span>
+                  <span className={`status-chip ${notebook.source_type === "google_drive" ? "embedding" : "idle"}`}>
+                    {notebook.source_type === "google_drive" ? "Google Drive" : "Manual"}
+                  </span>
+                  {notebook.sync_status && (
+                    <span className={`status-chip ${notebook.sync_status === "ok" ? "success" : notebook.sync_status === "error" ? "error" : "idle"}`}>
+                      Sync: {notebook.sync_status}
+                    </span>
+                  )}
                 </div>
 
                 {isEditing ? (
@@ -206,6 +279,8 @@ export default function NotebooksPage() {
                           description: notebook.description || "",
                           color: notebook.color || "#4f7cff",
                           visibility: notebook.visibility || "private",
+                          source_type: notebook.source_type || "manual",
+                          source_url: notebook.source_url || "",
                         })
                       }}
                       type="button"
@@ -222,7 +297,22 @@ export default function NotebooksPage() {
                     >
                       Files
                     </button>
+                    {notebook.source_type === "google_drive" && (
+                      <button
+                        className="btn btn-embed"
+                        onClick={() => syncNotebook(notebook)}
+                        disabled={syncingId === notebook.id || saving}
+                        type="button"
+                      >
+                        {syncingId === notebook.id ? "Syncing..." : "Sync"}
+                      </button>
+                    )}
                     <button className="btn btn-danger" onClick={() => deleteNotebook(notebook.id)} type="button">Delete</button>
+                  </div>
+                )}
+                {notebook.source_type === "google_drive" && (
+                  <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: "8px", lineHeight: 1.4 }}>
+                    Public folder URL only in v1. {notebook.synced_at ? `Last sync: ${new Date(notebook.synced_at).toLocaleString()}` : "Not synced yet."}
                   </div>
                 )}
               </article>
