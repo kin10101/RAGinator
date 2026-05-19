@@ -4,7 +4,6 @@ import FilesPage from "./pages/FilesPage"
 import ChunksPage from "./pages/ChunksPage"
 import ChatPage from "./pages/ChatPage"
 import NotebooksPage from "./pages/NotebooksPage"
-import { useNotebooks } from "./context/NotebookProvider"
 
 const FileIcon = () => (
   <svg className="nav-icon" viewBox="0 0 16 16" fill="none">
@@ -44,7 +43,6 @@ const MAX_WIDTH = 400
 const COLLAPSED_WIDTH = 48
 
 export default function App() {
-  const { activeNotebook } = useNotebooks()
   const [sidebarWidth, setSidebarWidth] = useState(210)
   const [collapsed, setCollapsed] = useState(false)
   const dragging = useRef(false)
@@ -84,8 +82,8 @@ export default function App() {
             </svg>
           </button>
         </div>
-        <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Notebook Select">
-          <ContextIcon /> {!collapsed && "Notebook Select"}
+        <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Notebooks">
+          <ContextIcon /> {!collapsed && "Notebooks"}
         </NavLink>
         <NavLink to="/files" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Files">
           <FileIcon /> {!collapsed && "Files"}
@@ -96,11 +94,6 @@ export default function App() {
         <NavLink to="/chat" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} title="Chat">
           <ChatIcon /> {!collapsed && "Chat"}
         </NavLink>
-        {!collapsed && activeNotebook && (
-          <div className="sidebar-notebook-chip" title={activeNotebook.name}>
-            Notebook: {activeNotebook.name}
-          </div>
-        )}
         {!collapsed && <div className="sidebar-footer">Talk to your Documents!
           Made by Don 😎</div>}
       </nav>

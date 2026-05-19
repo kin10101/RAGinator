@@ -25,4 +25,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["main", "chunker", "vectordb", "notebooks", "gdrive_connector"]
+py-modules = ["main", "chunker", "vectordb", "notebooks", "gdrive_connector", "github_connector"]

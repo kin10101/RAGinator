@@ -360,7 +360,7 @@ export default function FilesPage() {
             Notebook: {activeNotebook.name}
           </span>
         ) : (
-          <span className="status-chip error" title="Select a notebook from the Notebook Select page">
+          <span className="status-chip error" title="Select a notebook from the Notebooks page">
             No notebook selected
           </span>
         )}
@@ -413,7 +413,7 @@ export default function FilesPage() {
           </div>
           {!activeNotebook && (
             <div style={{ color: "var(--muted)", fontSize: "12px", marginBottom: "8px" }}>
-              Select a notebook on the Notebook Select page to view and upload files.
+              Select a notebook on the Notebooks page to view and upload files.
             </div>
           )}
           <div style={{ flex: 1, overflowY: "auto" }}>

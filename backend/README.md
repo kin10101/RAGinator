@@ -46,6 +46,7 @@ python retrieval_eval.py --dataset eval_dataset.sample.json --output eval_report
 - `POST /notebooks` -> create notebook
 - `PATCH /notebooks/{notebook_id}` -> update notebook
 - `DELETE /notebooks/{notebook_id}` -> delete notebook
+- `POST /notebooks/{notebook_id}/sync` -> sync external source files into a notebook (`google_drive` or `github_repo`)
 - `POST /notebooks/{notebook_id}/files` -> attach files to notebook
 - `DELETE /notebooks/{notebook_id}/files` -> detach files from notebook
 - `POST /search` -> retrieval test against vectors (`query`, `top_k`, optional `filename`, `min_relevance_score`, `include_debug`)

@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from chunker import DEFAULT_CHUNK_METHOD, chunk_text, list_chunk_methods, summarize_chunks
 from gdrive_connector import GoogleDriveSyncError, download_public_folder
+from github_connector import GitHubSyncError, download_github_repo
 from notebooks import (
     NotebookManager,
     DEFAULT_NOTEBOOK_COLOR,
@@ -418,10 +419,28 @@ def update_notebook_endpoint(notebook_id: str, request: NotebookUpdate):
 
 @app.delete("/notebooks/{notebook_id}")
 def delete_notebook_endpoint(notebook_id: str):
+    notebook = get_notebook_or_404(notebook_id)
+    associated_files = normalize_filenames(notebook.get("filenames", []))
+
+    deleted_files = []
+    for filename in associated_files:
+        target = safe_join(UPLOAD_DIR, filename)
+        if target.exists() and target.is_file():
+            delete_local_file(filename)
+            deleted_files.append(filename)
+            continue
+
+        # Clean any stale artifacts/references even when the source file is already gone.
+        cache_path = text_cache_path(filename)
+        if cache_path.exists():
+            cache_path.unlink()
+        delete_file_chunks(collection, filename)
+        notebook_manager.remove_filename_everywhere(filename)
+
     deleted = notebook_manager.delete_notebook(notebook_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_id}")
-    return {"deleted": notebook_id}
+    return {"deleted": notebook_id, "deleted_files": deleted_files, "deleted_file_count": len(deleted_files)}
 
 
 @app.post("/notebooks/{notebook_id}/sync")
@@ -430,8 +449,8 @@ def sync_notebook_endpoint(notebook_id: str, request: NotebookSyncRequest):
     source_type = (notebook.get("source_type") or DEFAULT_NOTEBOOK_SOURCE_TYPE).strip().lower()
     source_url = (notebook.get("source_url") or "").strip()
 
-    if source_type != "google_drive":
-        raise HTTPException(status_code=400, detail="Sync is only supported for Google Drive notebooks in this version")
+    if source_type not in {"google_drive", "github_repo"}:
+        raise HTTPException(status_code=400, detail="Sync is only supported for Google Drive and GitHub notebooks")
     if not source_url:
         raise HTTPException(status_code=400, detail="Notebook source_url is required for sync")
 
@@ -442,8 +461,13 @@ def sync_notebook_endpoint(notebook_id: str, request: NotebookSyncRequest):
     )
 
     try:
-        artifacts = download_public_folder(source_url)
-    except GoogleDriveSyncError as exc:
+        if source_type == "google_drive":
+            artifacts = download_public_folder(source_url)
+            source_prefix = "gdrive"
+        else:
+            artifacts = download_github_repo(source_url)
+            source_prefix = "github"
+    except (GoogleDriveSyncError, GitHubSyncError) as exc:
         notebook_manager.update_sync_state(
             notebook_id,
             sync_status="error",
@@ -469,6 +493,7 @@ def sync_notebook_endpoint(notebook_id: str, request: NotebookSyncRequest):
     embedded_total = 0
     added = 0
     updated = 0
+    should_embed = request.auto_embed and source_type not in {"github_repo", "google_drive"}
 
     for item in artifacts:
         provider_relative = str(item.get("relative_path") or "")
@@ -476,7 +501,7 @@ def sync_notebook_endpoint(notebook_id: str, request: NotebookSyncRequest):
         if not isinstance(content, (bytes, bytearray)):
             continue
 
-        candidate_path = f"gdrive/{notebook_id}/{provider_relative}"
+        candidate_path = f"{source_prefix}/{notebook_id}/{provider_relative}"
         normalized = save_bytes_upload(bytes(content), candidate_path)
 
         if normalized in previous_connector_set:
@@ -486,7 +511,7 @@ def sync_notebook_endpoint(notebook_id: str, request: NotebookSyncRequest):
 
         synced_filenames.append(normalized)
 
-        if request.auto_embed:
+        if should_embed:
             source = safe_join(UPLOAD_DIR, normalized)
             try:
                 chunks = build_chunks_for_text(

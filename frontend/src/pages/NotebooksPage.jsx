@@ -1,8 +1,9 @@
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import axios from "axios"
 import { useNavigate } from "react-router-dom"
 import { API_BASE_URL } from "../utils/api"
 import { useNotebooks } from "../context/NotebookProvider"
+import StatusModal from "../components/StatusModal"
 
 const API = API_BASE_URL
 
@@ -14,7 +15,168 @@ const VISIBILITY_OPTIONS = [
 const SOURCE_OPTIONS = [
   { value: "manual", label: "Manual" },
   { value: "google_drive", label: "Google Drive" },
+  { value: "github_repo", label: "GitHub Repo" },
 ]
+
+const BLANK_DRAFT = { name: "", description: "", color: "#4f7cff", visibility: "private", source_type: "manual", source_url: "" }
+
+function sourceLabel(sourceType) {
+  if (sourceType === "google_drive") return "Google Drive"
+  if (sourceType === "github_repo") return "GitHub Repo"
+  return "Manual"
+}
+
+function NotebookFormModal({ open, draft, onChange, onSubmit, onClose, submitting, error }) {
+  const nameRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e) => { if (e.key === "Escape") onClose() }
+    window.addEventListener("keydown", handler)
+    // Focus the name field when the modal opens
+    setTimeout(() => nameRef.current?.focus(), 50)
+    return () => window.removeEventListener("keydown", handler)
+  }, [open, onClose])
+
+  if (!open) return null
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+        backdropFilter: "blur(2px)",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderTop: "2px solid var(--accent)",
+          borderRadius: "var(--radius)",
+          padding: "24px 28px",
+          width: "100%",
+          maxWidth: "520px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.4)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "18px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--font)" }}>New Notebook</span>
+          <button
+            className="btn"
+            type="button"
+            onClick={onClose}
+            style={{ padding: "2px 8px", fontSize: "16px", lineHeight: 1 }}
+            aria-label="Close"
+          >✕</button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <span className="section-label" style={{ marginBottom: 0 }}>Name</span>
+            <input
+              ref={nameRef}
+              className="input"
+              value={draft.name}
+              onChange={(e) => onChange({ ...draft, name: e.target.value })}
+              placeholder="e.g. HR notebook"
+              onKeyDown={(e) => { if (e.key === "Enter" && draft.name.trim()) onSubmit() }}
+            />
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <span className="section-label" style={{ marginBottom: 0 }}>Description</span>
+            <input
+              className="input"
+              value={draft.description}
+              onChange={(e) => onChange({ ...draft, description: e.target.value })}
+              placeholder="Short notes"
+            />
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <span className="section-label" style={{ marginBottom: 0 }}>Source</span>
+            <select
+              className="select"
+              value={draft.source_type}
+              onChange={(e) => onChange({ ...draft, source_type: e.target.value })}
+            >
+              {SOURCE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
+
+          {draft.source_type !== "manual" && (
+            <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <span className="section-label" style={{ marginBottom: 0 }}>
+                {draft.source_type === "google_drive" ? "Google Drive Folder URL" : "GitHub Repository URL"}
+              </span>
+              <input
+                className="input"
+                value={draft.source_url}
+                onChange={(e) => onChange({ ...draft, source_url: e.target.value })}
+                placeholder={
+                  draft.source_type === "google_drive"
+                    ? "https://drive.google.com/drive/folders/..."
+                    : "https://github.com/owner/repo"
+                }
+              />
+            </label>
+          )}
+
+          <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <span className="section-label" style={{ marginBottom: 0 }}>Color</span>
+              <input
+                type="color"
+                value={draft.color}
+                onChange={(e) => onChange({ ...draft, color: e.target.value })}
+                title="Notebook color"
+                style={{ width: "36px", height: "32px", border: "none", background: "transparent", cursor: "pointer" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px", flex: 1 }}>
+              <span className="section-label" style={{ marginBottom: 0 }}>Visibility</span>
+              <select
+                className="select"
+                value={draft.visibility}
+                onChange={(e) => onChange({ ...draft, visibility: e.target.value })}
+              >
+                {VISIBILITY_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </select>
+            </label>
+          </div>
+        </div>
+
+        {error && (
+          <div className="status-chip error" style={{ fontSize: "12px" }}>{error}</div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+          <button className="btn" type="button" onClick={onClose} style={{ minWidth: "72px" }}>Cancel</button>
+          <button
+            className="btn btn-primary"
+            type="button"
+            onClick={onSubmit}
+            disabled={submitting || !draft.name.trim()}
+            style={{ minWidth: "80px" }}
+          >
+            {submitting ? "Creating…" : "Create"}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function NotebookForm({ value, onChange, onSubmit, submitting, submitLabel }) {
   return (
@@ -55,14 +217,20 @@ function NotebookForm({ value, onChange, onSubmit, submitting, submitLabel }) {
           {SOURCE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
         </select>
       </label>
-      {value.source_type === "google_drive" && (
+      {value.source_type !== "manual" && (
         <label style={{ display: "flex", flexDirection: "column", gap: "6px", minWidth: 0 }}>
-          <span className="section-label" style={{ marginBottom: 0 }}>Google Drive Folder URL</span>
+          <span className="section-label" style={{ marginBottom: 0 }}>
+            {value.source_type === "google_drive" ? "Google Drive Folder URL" : "GitHub Repository URL"}
+          </span>
           <input
             className="input"
             value={value.source_url}
             onChange={(e) => onChange({ ...value, source_url: e.target.value })}
-            placeholder="https://drive.google.com/drive/folders/..."
+            placeholder={
+              value.source_type === "google_drive"
+                ? "https://drive.google.com/drive/folders/..."
+                : "https://github.com/owner/repo"
+            }
           />
         </label>
       )}
@@ -98,6 +266,7 @@ export default function NotebooksPage() {
   const [saving, setSaving] = useState(false)
   const [syncingId, setSyncingId] = useState("")
   const [error, setError] = useState("")
+  const [modal, setModal] = useState(null)
   const [editDraft, setEditDraft] = useState({
     name: "",
     description: "",
@@ -106,14 +275,7 @@ export default function NotebooksPage() {
     source_type: "manual",
     source_url: "",
   })
-  const [draft, setDraft] = useState({
-    name: "",
-    description: "",
-    color: "#4f7cff",
-    visibility: "private",
-    source_type: "manual",
-    source_url: "",
-  })
+  const [draft, setDraft] = useState(BLANK_DRAFT)
 
   const createNotebook = async () => {
     setSaving(true)
@@ -121,20 +283,19 @@ export default function NotebooksPage() {
     try {
       await axios.post(`${API}/notebooks`, draft)
       await refreshNotebooks()
-      setDraft({
-        name: "",
-        description: "",
-        color: "#4f7cff",
-        visibility: "private",
-        source_type: "manual",
-        source_url: "",
-      })
+      setDraft(BLANK_DRAFT)
       setCreateOpen(false)
     } catch (err) {
       setError(err?.response?.data?.detail || "Failed to create notebook")
     } finally {
       setSaving(false)
     }
+  }
+
+  const closeCreateModal = () => {
+    setCreateOpen(false)
+    setError("")
+    setDraft(BLANK_DRAFT)
   }
 
   const updateNotebook = async (notebookId, value) => {
@@ -152,18 +313,28 @@ export default function NotebooksPage() {
   }
 
   const deleteNotebook = async (notebookId) => {
-    if (!window.confirm("Delete this notebook? Files will remain available.")) return
-    setSaving(true)
-    setError("")
-    try {
-      await axios.delete(`${API}/notebooks/${notebookId}`)
-      if (activeNotebookId === notebookId) setActiveNotebookId("")
-      await refreshNotebooks()
-    } catch (err) {
-      setError(err?.response?.data?.detail || "Failed to delete notebook")
-    } finally {
-      setSaving(false)
-    }
+    setModal({
+      status: "confirm",
+      title: "Delete notebook",
+      lines: [
+        "This notebook and its associated files will be permanently deleted.",
+        "Embedded chunks for those files will also be removed.",
+      ],
+      onConfirm: async () => {
+        setModal(null)
+        setSaving(true)
+        setError("")
+        try {
+          await axios.delete(`${API}/notebooks/${notebookId}`)
+          if (activeNotebookId === notebookId) setActiveNotebookId("")
+          await refreshNotebooks()
+        } catch (err) {
+          setError(err?.response?.data?.detail || "Failed to delete notebook")
+        } finally {
+          setSaving(false)
+        }
+      },
+    })
   }
 
   const syncNotebook = async (notebook) => {
@@ -184,31 +355,37 @@ export default function NotebooksPage() {
 
   return (
     <div className="page" style={{ overflowY: "auto" }}>
+      <StatusModal
+        open={!!modal}
+        status={modal?.status}
+        title={modal?.title}
+        lines={modal?.lines}
+        onClose={() => setModal(null)}
+        onConfirm={modal?.onConfirm}
+      />
+      <NotebookFormModal
+        open={createOpen}
+        draft={draft}
+        onChange={setDraft}
+        onSubmit={createNotebook}
+        onClose={closeCreateModal}
+        submitting={saving}
+        error={error}
+      />
       <div className="topbar">
-        <div className="topbar-title">Notebook Select</div>
+        <div className="topbar-title">Notebooks</div>
         <div className="topbar-actions">
-          <button className="btn btn-primary" onClick={() => setCreateOpen((v) => !v)} type="button">
-            {createOpen ? "Close" : "New Notebook"}
+          <button className="btn btn-primary" onClick={() => setCreateOpen(true)} type="button">
+            New Notebook
           </button>
         </div>
       </div>
 
       <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "16px" }}>
-        {createOpen && (
-          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "14px", background: "var(--surface)" }}>
-            <NotebookForm
-              value={draft}
-              onChange={setDraft}
-              onSubmit={createNotebook}
-              submitting={saving}
-              submitLabel="Create"
-            />
-          </div>
-        )}
 
-        {error && <div className="status-chip error" style={{ width: "fit-content" }}>{error}</div>}
+        {error && !createOpen && <div className="status-chip error" style={{ width: "fit-content" }}>{error}</div>}
 
-        <div className="cards-grid">
+        <div className="cards-grid notebook-cards-grid">
           {notebooks.map((notebook) => {
             const isActive = notebook.id === activeNotebookId
             const isEditing = notebook.id === editingId
@@ -219,6 +396,16 @@ export default function NotebooksPage() {
               <article
                 key={notebook.id}
                 className="chunk-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => !isEditing && setActiveNotebookId(notebook.id)}
+                onKeyDown={(e) => {
+                  if (isEditing) return
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    setActiveNotebookId(notebook.id)
+                  }
+                }}
                 style={{
                   borderColor: isActive ? (notebook.color || "var(--accent)") : undefined,
                   boxShadow: isActive ? `0 0 0 2px ${notebook.color || "var(--accent)"}33` : undefined,
@@ -242,8 +429,8 @@ export default function NotebooksPage() {
                   <span className={`status-chip ${notebook.visibility === "public" ? "embedding" : "idle"}`}>
                     {notebook.visibility || "private"}
                   </span>
-                  <span className={`status-chip ${notebook.source_type === "google_drive" ? "embedding" : "idle"}`}>
-                    {notebook.source_type === "google_drive" ? "Google Drive" : "Manual"}
+                  <span className={`status-chip ${notebook.source_type === "manual" ? "idle" : "embedding"}`}>
+                    {sourceLabel(notebook.source_type)}
                   </span>
                   {notebook.sync_status && (
                     <span className={`status-chip ${notebook.sync_status === "ok" ? "success" : notebook.sync_status === "error" ? "error" : "idle"}`}>
@@ -266,13 +453,11 @@ export default function NotebooksPage() {
                     </div>
                   </>
                 ) : (
-                  <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
-                    <button className={`btn ${isActive ? "btn-primary" : ""}`} onClick={() => setActiveNotebookId(notebook.id)} type="button">
-                      {isActive ? "Selected" : "Select"}
-                    </button>
+                  <div className="notebook-card-actions" style={{ marginTop: "4px" }}>
                     <button
                       className="btn"
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation()
                         setEditingId(notebook.id)
                         setEditDraft({
                           name: notebook.name || "",
@@ -289,7 +474,8 @@ export default function NotebooksPage() {
                     </button>
                     <button
                       className="btn"
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation()
                         setActiveNotebookId(notebook.id)
                         navigate("/files")
                       }}
@@ -297,22 +483,39 @@ export default function NotebooksPage() {
                     >
                       Files
                     </button>
-                    {notebook.source_type === "google_drive" && (
+                    {notebook.source_type !== "manual" && (
                       <button
                         className="btn btn-embed"
-                        onClick={() => syncNotebook(notebook)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          syncNotebook(notebook)
+                        }}
                         disabled={syncingId === notebook.id || saving}
                         type="button"
                       >
                         {syncingId === notebook.id ? "Syncing..." : "Sync"}
                       </button>
                     )}
-                    <button className="btn btn-danger" onClick={() => deleteNotebook(notebook.id)} type="button">Delete</button>
+                    <button
+                      className="btn btn-danger"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        deleteNotebook(notebook.id)
+                      }}
+                      type="button"
+                    >
+                      Delete
+                    </button>
                   </div>
                 )}
                 {notebook.source_type === "google_drive" && (
                   <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: "8px", lineHeight: 1.4 }}>
                     Public folder URL only in v1. {notebook.synced_at ? `Last sync: ${new Date(notebook.synced_at).toLocaleString()}` : "Not synced yet."}
+                  </div>
+                )}
+                {notebook.source_type === "github_repo" && (
+                  <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: "8px", lineHeight: 1.4 }}>
+                    Public github.com repo URL only in v1. {notebook.synced_at ? `Last sync: ${new Date(notebook.synced_at).toLocaleString()}` : "Not synced yet."}
                   </div>
                 )}
               </article>

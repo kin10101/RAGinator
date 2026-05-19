@@ -162,6 +162,24 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
   const handleChange = (key, value) => onChange({ ...config, [key]: value })
   const [ollamaModels, setOllamaModels] = useState([])
   const [ollamaError, setOllamaError] = useState(null)
+  const settingDescriptions = {
+    provider: "Choose which LLM backend powers chat responses.",
+    ollamaBaseUrl: "Base API endpoint for your local Ollama server.",
+    model: "Model name used for generation.",
+    temperature: "Controls randomness. Lower is more deterministic; higher is more creative.",
+    maxTokens: "Maximum tokens the model can generate for each response.",
+    topK: "Number of top retrieved chunks sent to the model as context.",
+    retrievalMode: "Hybrid mixes dense and lexical search; dense uses embeddings only.",
+    reranker: "Adds a reranking stage to improve final chunk ordering before generation.",
+    minRelevance: "Filters out chunks below this relevance threshold.",
+    densePool: "How many dense-search candidates to collect before filtering/reranking.",
+    lexicalPool: "How many keyword-search candidates to collect before filtering/reranking.",
+    rerankPool: "How many candidates are passed into the reranker stage.",
+    ragEnabled: "When off, the model answers without retrieval from your indexed files.",
+    retrievalDebug: "Includes retrieval diagnostics and scoring metadata in the response payload.",
+    fileFilter: "Limit retrieval to a single file. Leave as All files for global search.",
+    systemPrompt: "High-level behavior instructions prepended to every request.",
+  }
 
   // Fetch Ollama models whenever the provider or base URL changes
   useEffect(() => {
@@ -183,7 +201,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         <button className="chat-settings-close" onClick={onClose}>✕</button>
       </div>
 
-      <label className="chat-settings-label">Provider</label>
+      <label className="chat-settings-label" title={settingDescriptions.provider}>Provider</label>
       <select
         className="chat-settings-select"
         value={config.provider}
@@ -202,7 +220,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
 
       {config.provider === "ollama" && (
         <>
-          <label className="chat-settings-label">Ollama base URL</label>
+          <label className="chat-settings-label" title={settingDescriptions.ollamaBaseUrl}>Ollama base URL</label>
           <input
             type="text"
             className="chat-settings-input"
@@ -213,7 +231,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         </>
       )}
 
-      <label className="chat-settings-label">Model</label>
+      <label className="chat-settings-label" title={settingDescriptions.model}>Model</label>
       {config.provider === "ollama" ? (
         ollamaModels.length > 0 ? (
           <select
@@ -249,7 +267,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         </select>
       )}
 
-      <label className="chat-settings-label">Temperature — {config.temperature}</label>
+      <label className="chat-settings-label" title={settingDescriptions.temperature}>Temperature — {config.temperature}</label>
       <input
         type="range" min="0" max="1" step="0.05"
         className="chat-settings-range"
@@ -257,7 +275,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         onChange={(e) => handleChange("temperature", parseFloat(e.target.value))}
       />
 
-      <label className="chat-settings-label">Max tokens</label>
+      <label className="chat-settings-label" title={settingDescriptions.maxTokens}>Max tokens</label>
       <input
         type="number" min="64" max="4096" step="64"
         className="chat-settings-input"
@@ -265,7 +283,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         onChange={(e) => handleChange("max_tokens", parseInt(e.target.value, 10))}
       />
 
-      <label className="chat-settings-label">RAG — top-K chunks</label>
+      <label className="chat-settings-label" title={settingDescriptions.topK}>RAG — top-K chunks</label>
       <input
         type="number" min="1" max="20" step="1"
         className="chat-settings-input"
@@ -273,7 +291,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         onChange={(e) => handleChange("top_k", parseInt(e.target.value, 10))}
       />
 
-      <label className="chat-settings-label">RAG — retrieval mode</label>
+      <label className="chat-settings-label" title={settingDescriptions.retrievalMode}>RAG — retrieval mode</label>
       <select
         className="chat-settings-select"
         value={config.retrieval_mode}
@@ -283,7 +301,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         <option value="dense">Dense only</option>
       </select>
 
-      <label className="chat-settings-label">
+      <label className="chat-settings-label" title={settingDescriptions.reranker}>
         <input
           type="checkbox"
           checked={config.rerank_enabled}
@@ -293,7 +311,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         Enable reranker stage
       </label>
 
-      <label className="chat-settings-label">RAG — minimum relevance score ({config.min_relevance_score})</label>
+      <label className="chat-settings-label" title={settingDescriptions.minRelevance}>RAG — minimum relevance score ({config.min_relevance_score})</label>
       <input
         type="range" min="0" max="1" step="0.01"
         className="chat-settings-range"
@@ -301,7 +319,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         onChange={(e) => handleChange("min_relevance_score", parseFloat(e.target.value))}
       />
 
-      <label className="chat-settings-label">Dense candidate pool</label>
+      <label className="chat-settings-label" title={settingDescriptions.densePool}>Dense candidate pool</label>
       <input
         type="number" min="1" max="200" step="1"
         className="chat-settings-input"
@@ -309,7 +327,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         onChange={(e) => handleChange("dense_candidate_k", parseInt(e.target.value, 10))}
       />
 
-      <label className="chat-settings-label">Lexical candidate pool</label>
+      <label className="chat-settings-label" title={settingDescriptions.lexicalPool}>Lexical candidate pool</label>
       <input
         type="number" min="1" max="200" step="1"
         className="chat-settings-input"
@@ -317,7 +335,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         onChange={(e) => handleChange("lexical_candidate_k", parseInt(e.target.value, 10))}
       />
 
-      <label className="chat-settings-label">Rerank candidate pool</label>
+      <label className="chat-settings-label" title={settingDescriptions.rerankPool}>Rerank candidate pool</label>
       <input
         type="number" min="1" max="200" step="1"
         className="chat-settings-input"
@@ -325,7 +343,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         onChange={(e) => handleChange("rerank_candidate_k", parseInt(e.target.value, 10))}
       />
 
-      <label className="chat-settings-label">
+      <label className="chat-settings-label" title={settingDescriptions.ragEnabled}>
         <input
           type="checkbox"
           checked={config.rag_enabled}
@@ -335,7 +353,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         Enable RAG retrieval
       </label>
 
-      <label className="chat-settings-label">
+      <label className="chat-settings-label" title={settingDescriptions.retrievalDebug}>
         <input
           type="checkbox"
           checked={config.retrieval_debug}
@@ -345,7 +363,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         Include retrieval diagnostics
       </label>
 
-      <label className="chat-settings-label" style={{ marginTop: "12px" }}>Filter by file (optional)</label>
+      <label className="chat-settings-label" title={settingDescriptions.fileFilter} style={{ marginTop: "12px" }}>Filter by file (optional)</label>
       <select
         className="chat-settings-select"
         value={config.filename_filter || ""}
@@ -362,7 +380,7 @@ function SettingsPanel({ config, onChange, files, activeNotebook, onClose }) {
         </span>
       )}
 
-      <label className="chat-settings-label" style={{ marginTop: "12px" }}>System prompt</label>
+      <label className="chat-settings-label" title={settingDescriptions.systemPrompt} style={{ marginTop: "12px" }}>System prompt</label>
       <textarea
         className="chat-settings-textarea"
         rows={12}

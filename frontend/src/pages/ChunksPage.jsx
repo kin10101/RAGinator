@@ -157,7 +157,7 @@ export default function ChunksPage() {
       <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "20px" }}>
         {!activeNotebook && (
           <div style={{ color: "var(--muted)", fontSize: "12px" }}>
-            Select a notebook on the Notebook Select page to view chunks.
+            Select a notebook on the Notebooks page to view chunks.
           </div>
         )}
         {searchResults.length > 0 && (

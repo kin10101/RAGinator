@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import axios from "axios"
+import StatusModal from "./StatusModal"
 import "../index.css"
 
 function encodeFilePath(path) {
@@ -12,6 +13,7 @@ function encodeFilePath(path) {
 export default function FileDetail({ API, file, onClose, onRefresh, onEmbed }) {
   const [content, setContent] = useState("")
   const [newName, setNewName] = useState(file.filename)
+  const [modal, setModal] = useState(null)
   const encodedFilename = encodeFilePath(file.filename)
 
   useEffect(() => {
@@ -37,14 +39,29 @@ export default function FileDetail({ API, file, onClose, onRefresh, onEmbed }) {
   }
 
   const handleDelete = async () => {
-    if (!window.confirm(`Delete "${file.filename}"?`)) return
-    try {
-      await axios.delete(`${API}/files/${encodedFilename}`)
-      await onRefresh()
-      onClose()
-    } catch (e) {
-      console.error(e)
-    }
+    setModal({
+      status: "confirm",
+      title: "Delete file",
+      lines: [
+        `"${file.filename}" will be permanently deleted.`,
+        "Its embedded chunks will also be removed.",
+      ],
+      onConfirm: async () => {
+        setModal(null)
+        try {
+          await axios.delete(`${API}/files/${encodedFilename}`)
+          await onRefresh()
+          onClose()
+        } catch (e) {
+          console.error(e)
+          setModal({
+            status: "error",
+            title: "Delete failed",
+            lines: ["Could not delete the selected file."],
+          })
+        }
+      },
+    })
   }
 
   const handleEmbed = async () => {
@@ -52,19 +69,28 @@ export default function FileDetail({ API, file, onClose, onRefresh, onEmbed }) {
   }
 
   return (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        flexDirection: "column",
-        gap: "16px",
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius)",
-        padding: "24px",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
+    <>
+      <StatusModal
+        open={!!modal}
+        status={modal?.status}
+        title={modal?.title}
+        lines={modal?.lines}
+        onClose={() => setModal(null)}
+        onConfirm={modal?.onConfirm}
+      />
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          padding: "24px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1 }}>
           <input
             value={newName}
@@ -102,27 +128,28 @@ export default function FileDetail({ API, file, onClose, onRefresh, onEmbed }) {
         </div>
       </div>
 
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: "300px" }}>
-        <div className="section-label" style={{ marginBottom: "8px" }}>Raw Content</div>
-        <textarea
-          value={content}
-          readOnly
-          style={{
-            flex: 1,
-            width: "100%",
-            background: "var(--bg)",
-            color: "var(--muted)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            padding: "16px",
-            fontSize: "12px",
-            fontFamily: "var(--mono)",
-            lineHeight: 1.5,
-            resize: "none",
-            outline: "none",
-          }}
-        />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: "300px" }}>
+          <div className="section-label" style={{ marginBottom: "8px" }}>Raw Content</div>
+          <textarea
+            value={content}
+            readOnly
+            style={{
+              flex: 1,
+              width: "100%",
+              background: "var(--bg)",
+              color: "var(--muted)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              padding: "16px",
+              fontSize: "12px",
+              fontFamily: "var(--mono)",
+              lineHeight: 1.5,
+              resize: "none",
+              outline: "none",
+            }}
+          />
+        </div>
       </div>
-    </div>
+    </>
   )
 }
